@@ -461,18 +461,140 @@ def build_crate_roster(stage_id: int) -> list:
 # ==========================================================================
 
 class BotAI:
+    """Cycling tank AI modeled after the Disasteroids / Flicky bot pattern:
+    HUNT → ATTACK → STRAFE → EVADE → CRUISE, rotating every ~3 seconds
+    or when state-specific triggers fire (target lost, low HP, etc.).
+
+    Output each tick: (heading_radians, should_fire, should_drop_mine,
+    should_throw_bomb, dx_fxp, dy_fxp) — server applies dx/dy to the
+    bot's x/y each tick so its position actually advances instead of
+    drifting on a static snapshot.
+    """
+    STATE_CRUISE = 0
+    STATE_HUNT   = 1
+    STATE_ATTACK = 2
+    STATE_STRAFE = 3
+    STATE_EVADE  = 4
+
     def __init__(self):
         self.tick = 0
         self.heading = 0.0
+        self.state = self.STATE_CRUISE
+        self.state_timer = 0
 
-    def decide(self):
+    def _pick_target(self, self_pid: int, players: dict):
+        """Return (pid, player) of nearest alive non-self player, or None."""
+        candidates = [(pid, p) for pid, p in players.items()
+                      if pid != self_pid and p.alive and p.hp > 0]
+        if not candidates:
+            return None
+        me = players.get(self_pid)
+        if me is None:
+            return candidates[0]
+        def sqdist(p):
+            dx = (p[1].x - me.x) >> 16
+            dy = (p[1].y - me.y) >> 16
+            return dx * dx + dy * dy
+        candidates.sort(key=sqdist)
+        return candidates[0]
+
+    def decide(self, self_pid: int, players: dict, crates: list):
         self.tick += 1
-        # cycle heading every ~3 seconds
-        if self.tick % 60 == 0:
-            self.heading = random.uniform(-3.14, 3.14)
-        # fire every ~2 seconds
-        fire = (self.tick % 40 == 0)
-        return self.heading, fire
+        self.state_timer += 1
+
+        me = players.get(self_pid)
+        if me is None:
+            return 0.0, False, False, False, 0, 0
+
+        # State transitions
+        if self.state_timer > 180:   # 9s max per state
+            self.state_timer = 0
+            self.state = random.choice([self.STATE_HUNT, self.STATE_CRUISE,
+                                        self.STATE_STRAFE])
+        if me.hp <= 2 and self.state != self.STATE_EVADE:
+            self.state = self.STATE_EVADE
+            self.state_timer = 0
+
+        target = self._pick_target(self_pid, players)
+
+        # Default outputs
+        dx = dy = 0
+        fire = False
+        drop_mine = False
+        throw_bomb = False
+        heading = self.heading
+
+        # Speed: 1 fxp unit per tick in world space (~= ~20 units/sec)
+        SPEED = 1 << 16
+
+        if self.state == self.STATE_CRUISE:
+            # Random walk
+            if self.tick % 30 == 0:
+                self.heading = random.uniform(-3.14, 3.14)
+            heading = self.heading
+            dx = int(SPEED * math_cos(heading))
+            dy = int(SPEED * math_sin(heading))
+
+        elif self.state in (self.STATE_HUNT, self.STATE_ATTACK):
+            if target is None:
+                self.state = self.STATE_CRUISE
+                self.state_timer = 0
+            else:
+                tpid, tp = target
+                dx_to = tp.x - me.x
+                dy_to = tp.y - me.y
+                heading = math_atan2(dy_to, dx_to)
+                self.heading = heading
+                # In HUNT we close distance; in ATTACK we hold and fire
+                dist_sq = ((dx_to >> 16) ** 2) + ((dy_to >> 16) ** 2)
+                if dist_sq > 50 * 50:
+                    self.state = self.STATE_HUNT
+                    dx = int(SPEED * math_cos(heading))
+                    dy = int(SPEED * math_sin(heading))
+                else:
+                    self.state = self.STATE_ATTACK
+                    fire = (self.tick % 12 == 0)
+
+        elif self.state == self.STATE_STRAFE:
+            # Circle around target
+            if target is None:
+                self.state = self.STATE_CRUISE
+            else:
+                tpid, tp = target
+                dx_to = tp.x - me.x
+                dy_to = tp.y - me.y
+                toward = math_atan2(dy_to, dx_to)
+                heading = toward + 1.57   # 90° sidestep
+                self.heading = toward     # face target
+                dx = int((SPEED >> 1) * math_cos(heading))
+                dy = int((SPEED >> 1) * math_sin(heading))
+                fire = (self.tick % 20 == 0)
+
+        elif self.state == self.STATE_EVADE:
+            # Retreat away from nearest threat, drop mine occasionally
+            if target is None:
+                self.state = self.STATE_CRUISE
+            else:
+                tpid, tp = target
+                dx_to = tp.x - me.x
+                dy_to = tp.y - me.y
+                away = math_atan2(dy_to, dx_to) + 3.14
+                heading = away
+                self.heading = heading
+                dx = int(SPEED * math_cos(heading))
+                dy = int(SPEED * math_sin(heading))
+                drop_mine = (self.tick % 90 == 0)
+                if self.state_timer > 120:
+                    self.state = self.STATE_CRUISE
+                    self.state_timer = 0
+
+        return heading, fire, drop_mine, throw_bomb, dx, dy
+
+
+# Tiny math shims so we avoid importing math at module-top above constants
+def math_cos(x): import math; return math.cos(x)
+def math_sin(x): import math; return math.sin(x)
+def math_atan2(y, x): import math; return math.atan2(y, x)
 
 
 class BotPlayer:
@@ -487,6 +609,10 @@ class BotPlayer:
         self.hp = HP_MAX
         self.kills = 0
         self.deaths = 0
+        # Respawn pause — when bot dies, pause AI/physics/SYNC for N ticks
+        # (Disasteroids QA-pass fix: otherwise bots kept broadcasting a
+        # zombie SHIP_SYNC during their respawn window).
+        self.respawn_timer = 0
 
 
 # ==========================================================================
@@ -584,6 +710,12 @@ class UtenyaaServer:
         self._admin_httpd = None
         self._admin_thread = None
 
+        # Join history (Flicky pattern — admin portal wants a timeline)
+        self._join_history: list = []
+        self._join_history_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "join_history.json")
+        self._load_join_history()
+
         self._last_tick = 0.0
         self._tick_interval = 1.0 / SERVER_TICK_RATE
 
@@ -605,6 +737,32 @@ class UtenyaaServer:
                 json.dump({"players": self.leaderboard}, f, indent=2)
         except Exception as e:
             log.warning("Failed to save leaderboard: %s", e)
+
+    def _load_join_history(self):
+        try:
+            if os.path.exists(self._join_history_path):
+                with open(self._join_history_path, "r") as f:
+                    self._join_history = json.load(f)
+        except Exception as e:
+            log.warning("Failed to load join history: %s", e)
+            self._join_history = []
+
+    def _save_join_history(self):
+        try:
+            # Cap at last 500 entries to keep file small
+            self._join_history = self._join_history[-500:]
+            with open(self._join_history_path, "w") as f:
+                json.dump(self._join_history, f, indent=2)
+        except Exception as e:
+            log.warning("Failed to save join history: %s", e)
+
+    def _record_join(self, username: str, address):
+        self._join_history.append({
+            "t":    int(time.time()),
+            "name": username,
+            "addr": str(address[0]) if address else "?"
+        })
+        self._save_join_history()
 
     # ---------- player/client helpers ----------
 
@@ -847,17 +1005,55 @@ class UtenyaaServer:
                     self._broadcast(build_crate_spawn(
                         crate.slot, crate.x, crate.y, crate.z, crate.flags))
 
-        # Tick bots (stub AI)
+        # Tick bots — HUNT/ATTACK/STRAFE/EVADE cycling AI with respawn pause
         for bot in self.bots:
             if bot.pid == 0xFF: continue
             p = self.game_players.get(bot.pid)
-            if not p or not p.alive: continue
-            heading, _fire = bot.ai.decide()
-            # Broadcast a cheap PLAYER_SYNC so remote clients see bots moving
+            if not p: continue
+
+            # Respawn pause: if bot was killed, freeze AI + skip broadcasts
+            # until the respawn timer expires (3s @ 20 ticks/sec = 60 ticks).
+            if not p.alive:
+                if bot.respawn_timer > 0:
+                    bot.respawn_timer -= 1
+                elif bot.respawn_timer == 0:
+                    # Respawn the bot
+                    p.alive = True
+                    p.hp = HP_MAX
+                    # Reset position to a cheap default (client World owns
+                    # real spawn positions — this is just a placeholder)
+                    p.x = random.randint(-400, 400) << 16
+                    p.y = random.randint(-400, 400) << 16
+                continue
+
+            heading, fire, drop_mine, throw_bomb, ddx, ddy = bot.ai.decide(
+                bot.pid, self.game_players, self.match.crates)
+
+            # Advance bot position so it actually moves in the world
+            p.x = (p.x + ddx) & 0xFFFFFFFF
+            p.y = (p.y + ddy) & 0xFFFFFFFF
+            p.angle = int(heading * 1000)
+            p.dx = ddx
+            p.dy = ddy
+
+            # Fire projectiles as commanded by AI
+            if fire:
+                eid = self.match.alloc_entity_id()
+                # Unit heading vector, ~bullet speed baseline
+                import math as _m
+                vx = int(_m.cos(heading) * (10 << 16))
+                vy = int(_m.sin(heading) * (10 << 16))
+                self._broadcast(build_bullet_spawn(
+                    eid, p.pid, p.x, p.y, p.z, vx, vy, 0))
+            if drop_mine:
+                eid = self.match.alloc_entity_id()
+                self._broadcast(build_mine_spawn(eid, p.pid, p.x, p.y, p.z))
+
+            # Broadcast a PLAYER_SYNC so remote clients track the bot
             if bot.ai.tick % 4 == 0:
                 self._broadcast(build_player_sync(
                     p.pid, p.x, p.y, p.z, p.dx, p.dy, p.dz,
-                    int(heading * 1000), p.hp, 0xFF))
+                    p.angle, p.hp, 0xFF))
 
         # End conditions
         alive_count = sum(1 for p in self.game_players.values() if p.alive)
@@ -921,6 +1117,7 @@ class UtenyaaServer:
             self.clients[c.user_id] = c
             self.uuid_map[c.uuid] = c.user_id
             c.send_raw(build_welcome(c.user_id, c.uuid, c.username, back=False))
+            self._record_join(c.username, c.address)
             self._broadcast_lobby()
             return
 
@@ -1020,6 +1217,16 @@ class UtenyaaServer:
                 self._broadcast(build_player_kill(p.pid, 0xFF))
                 self._broadcast(build_score_update(p.pid, p.kills, p.deaths,
                                                    max(p.hp, 0)))
+                # If any bot was the attacker attribution, bump their kill
+                # count here in a future revision. For now: trigger respawn
+                # timer if THIS player was a bot (wouldn't happen normally —
+                # bots don't send CLIENT_DEATH — but future client-side
+                # damage attribution might). Bot respawn is managed via
+                # the alive=False gate in the tick loop.
+                for bot in self.bots:
+                    if bot.pid == p.pid:
+                        bot.respawn_timer = 60   # 3s @ 20 ticks/sec
+                        break
         elif op == UNET_ADD_LOCAL_PLAYER:
             name, _ = read_lp_string(payload, 1)
             if name:
@@ -1228,6 +1435,34 @@ class UtenyaaServer:
                     self.end_headers()
                     self.wfile.write(body)
                     return
+                if path.startswith("/api/join_history"):
+                    body = json.dumps(server_ref._join_history).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if path.startswith("/api/clients"):
+                    clients = []
+                    for uid, cc in server_ref.clients.items():
+                        if not cc.authenticated: continue
+                        clients.append({
+                            "uid":       uid,
+                            "username":  cc.username,
+                            "address":   str(cc.address[0]) if cc.address else "?",
+                            "ready":     cc.ready,
+                            "in_game":   cc.in_game,
+                            "character": cc.character_id,
+                            "vote":      cc.stage_vote,
+                        })
+                    body = json.dumps(clients).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 self.send_response(404); self.end_headers()
 
             def do_POST(self):
@@ -1238,6 +1473,13 @@ class UtenyaaServer:
                     self.send_response(200); self.end_headers(); return
                 if self.path == "/api/end_match":
                     server_ref._admin_cmds.put((server_ref._end_match, (False,)))
+                    self.send_response(200); self.end_headers(); return
+                if self.path.startswith("/api/kick/"):
+                    try:
+                        uid = int(self.path[len("/api/kick/"):])
+                    except ValueError:
+                        self.send_response(400); self.end_headers(); return
+                    server_ref._admin_cmds.put((server_ref._drop_client, (uid,)))
                     self.send_response(200); self.end_headers(); return
                 if self.path.startswith("/api/tune/"):
                     key = self.path[len("/api/tune/"):]
