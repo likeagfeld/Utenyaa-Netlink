@@ -267,7 +267,7 @@ namespace Objects
 	 * @param file Map file name
 	 * @param firstTerrainTexture Index of first terrain texture
 	 */
-	Map::Map(const char* file, int firstTerrainTexture)
+	inline Map::Map(const char* file, int firstTerrainTexture)
 	{
 		// Load level data
 		char* stream = jo_fs_read_file_in_dir(file, JO_ROOT_DIR, NULL);
@@ -399,11 +399,11 @@ namespace Objects
 
 	/** @brief Frees all resources and destroys the isntance
 	 */
-	Map::~Map() {}
+	inline Map::~Map() {}
 
 	/** @brief Draw map
 	 */
-	void Map::Draw()
+	inline void Map::Draw()
 	{
 		jo_3d_mesh_draw(this->mapMesh.JoPtr());
 	}
@@ -415,7 +415,7 @@ namespace Objects
 	 * @param y Tile Y coordinate
 	 * @param result
 	 */
-	void Map::GetTileHeights(const LevelData* data, const int x, const int y, int* result)
+	inline void Map::GetTileHeights(const LevelData* data, const int x, const int y, int* result)
 	{
 		int dim = Map::MapDimensionSize - 1;
 

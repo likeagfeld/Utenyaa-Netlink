@@ -75,15 +75,20 @@ net_transport_t g_saturn_transport = {
  * Init
  *============================================================================*/
 
+static bool s_glue_initialized = false;
+static bool s_modem_probed = false;
+
+/* Minimal init: just set g_Game defaults so main.cxx can read them.
+ * The heavy stuff (font load, net init, modem detect) is deferred to
+ * unet_glue_lazy_init_online() which only fires when the user actually
+ * picks Play Online from the menu. Crashing on emulators without
+ * NetLink MMIO while the user is still on the title screen would be
+ * terrible UX. */
 void unet_glue_init(void)
 {
-    static const struct { uint32_t base; uint32_t stride; } addrs[] = {
-        { 0x25895001, 4 },
-        { 0x04895001, 4 }
-    };
-    int i;
+    if (s_glue_initialized) return;
+    s_glue_initialized = true;
 
-    /* Default game state — offline until user picks ONLINE from menu */
     memset(&g_Game, 0, sizeof(g_Game));
     g_Game.gameState = UGAME_STATE_NONE;
     g_Game.myPlayerID = 0xFF;
@@ -92,11 +97,28 @@ void unet_glue_init(void)
     g_Game.myCharacter2 = 0xFF;
     g_Game.myStageVote = 0xFF;
     g_Game.titleScreenChoice = 0;
+    g_modem_detected = false;
+}
 
-    /* Load bitmap font (FONT.TGA in cd root) */
+/* Called from unet_glue_enter_online() ONLY when the user actually
+ * chose to go online from the MainMenu. Runs the expensive/possibly-
+ * unsafe steps: font load, net state init, SMPC NEON to the modem,
+ * UART register probing. */
+static void unet_glue_lazy_init_online(void)
+{
+    static const struct { uint32_t base; uint32_t stride; } addrs[] = {
+        { 0x25895001, 4 },
+        { 0x04895001, 4 }
+    };
+    int i;
+
+    if (s_modem_probed) return;
+    s_modem_probed = true;
+
+    /* Load bitmap font */
     font_load();
 
-    /* Init net client */
+    /* Init net client state machine */
     unet_init();
 
     /* Bind transport */
@@ -122,6 +144,8 @@ void unet_glue_init(void)
 
 void unet_glue_enter_online(void)
 {
+    /* Run heavy init exactly once, the first time the user picks online. */
+    unet_glue_lazy_init_online();
     g_Game.isOnlineMode = true;
     g_Game.gameState = UGAME_STATE_NAME_ENTRY;
     nameEntry_init();
@@ -180,6 +204,10 @@ static void led_tick(void)
 
 void unet_glue_tick_frame(void)
 {
+    /* Skip entirely unless the user has entered the online flow. Avoids
+     * any NetLink MMIO poking on the title screen and during offline play. */
+    if (!s_modem_probed) return;
+
     /* Network state machine (runs every frame once transport is live) */
     unet_tick();
 
