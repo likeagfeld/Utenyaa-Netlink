@@ -1,78 +1,87 @@
 /*
- * font.c - Custom sprite font for online screens
+ * font.c - Online-screen text rendering via jo_printf (VDP2 NBG text)
  *
- * Loads FONT.TGA as a tileset and provides string drawing functions
- * using VDP1 sprites instead of VDP2 jo_printf text. Ported verbatim
- * from the Flicky's Flock / Disasteroids implementation.
+ * The sprite-font path that ships with Disasteroids / Flicky's Flock
+ * (jo_sprite_add_tga_tileset of FONT.TGA) can't be used on Utenyaa
+ * without blowing JO_MAX_SPRITE — Utenyaa already uses ~103 of the
+ * 100 upstream sprite slots just for PAKs + models, and bumping the
+ * cap triggers pool OOM on boot. Instead, we render online-screen
+ * text through jo_printf which writes to a VDP2 NBG character plane
+ * and consumes zero sprite slots.
+ *
+ * The API shape (font_draw / font_draw_centered / font_printf /
+ * font_printf_centered with VDP1 pixel coords) is preserved so the
+ * connecting / name_entry / lobby screens don't need to change —
+ * the pixel coords are converted to the jo_printf 40×28 character
+ * grid at draw time.
  */
 
 #include "font.h"
 #include <stdarg.h>
 #include <stdio.h>
 
-static int g_fontBase = -1;
-
+/* Keep font_load as a no-op so any call-site that invokes it still links. */
 void font_load(void)
 {
-    jo_tile tiles[FONT_COUNT];
-    int i;
-
-    for (i = 0; i < FONT_COUNT; i++) {
-        tiles[i].x = i * FONT_CHAR_W;
-        tiles[i].y = 0;
-        tiles[i].width = FONT_CHAR_W;
-        tiles[i].height = FONT_CHAR_H;
-    }
-
-    g_fontBase = jo_sprite_add_tga_tileset(JO_ROOT_DIR, "FONT.TGA",
-                                           JO_COLOR_Transparent,
-                                           tiles, FONT_COUNT);
+    /* VDP2 NBG text is set up by jo_core_init — nothing to do here. */
 }
 
-void font_draw(const char* str, int x, int y, int z)
+/* jo_printf uses a 40-col × 28-row text grid. Our API takes VDP1
+ * pixel coords. Convert: +160/+112 to shift from VDP1-centred to
+ * top-left, then divide by 8 for the cell grid. */
+static inline int px_to_col(int x) { return (x + 160) / 8; }
+static inline int px_to_row(int y) { return (y + 112) / 8; }
+
+static void draw_line(int col, int row, const char* s)
 {
-    unsigned char c;
-
-    if (g_fontBase < 0 || !str) return;
-
-    while (*str) {
-        c = (unsigned char)*str;
-        if (c >= 'a' && c <= 'z') c = (unsigned char)(c - 'a' + 'A');
-        if (c >= FONT_FIRST && c <= FONT_LAST) {
-            jo_sprite_draw3D(g_fontBase + (c - FONT_FIRST),
-                             x + (FONT_CHAR_W / 2),
-                             y + (FONT_CHAR_H / 2), z);
-        }
-        x += FONT_CHAR_W;
-        str++;
+    if (!s) return;
+    if (row < 0 || row >= 28) return;
+    char buf[41];
+    int i = 0, x = col;
+    while (s[i] && x < 40) {
+        buf[i] = s[i];
+        i++; x++;
     }
+    buf[i] = '\0';
+    if (col >= 0 && col < 40)
+        jo_printf(col, row, "%s", buf);
 }
 
-void font_draw_centered(const char* str, int y, int z)
+void font_draw(const char* str, int x, int y, int /*z*/)
 {
-    int len = 0;
-    const char* p = str;
+    draw_line(px_to_col(x), px_to_row(y), str);
+}
+
+void font_draw_centered(const char* str, int y, int /*z*/)
+{
     if (!str) return;
-    while (*p++) len++;
-    font_draw(str, -(len * FONT_CHAR_W) / 2, y, z);
+    int len = 0;
+    while (str[len]) len++;
+    int col = 20 - len / 2;
+    if (col < 0) col = 0;
+    draw_line(col, px_to_row(y), str);
 }
 
-void font_printf(int x, int y, int z, const char* fmt, ...)
+void font_printf(int x, int y, int /*z*/, const char* fmt, ...)
 {
     static char buf[80];
     va_list args;
     va_start(args, fmt);
     vsprintf(buf, fmt, args);
     va_end(args);
-    font_draw(buf, x, y, z);
+    draw_line(px_to_col(x), px_to_row(y), buf);
 }
 
-void font_printf_centered(int y, int z, const char* fmt, ...)
+void font_printf_centered(int y, int /*z*/, const char* fmt, ...)
 {
     static char buf[80];
     va_list args;
     va_start(args, fmt);
     vsprintf(buf, fmt, args);
     va_end(args);
-    font_draw_centered(buf, y, z);
+    int len = 0;
+    while (buf[len]) len++;
+    int col = 20 - len / 2;
+    if (col < 0) col = 0;
+    draw_line(col, px_to_row(y), buf);
 }
