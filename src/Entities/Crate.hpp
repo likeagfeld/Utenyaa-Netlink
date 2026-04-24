@@ -52,9 +52,9 @@ namespace Entities
 		 */
 		Fxp groundHeight;
 
-		/** @brief Box collider
+		/** @brief Box collider (populated when crate lands; gated by isOnGround)
 		 */
-		AABB collider;
+		AABB collider{};
 
 		/** @brief Crate rotation
 		 */
@@ -74,7 +74,7 @@ namespace Entities
 
 		/** @brief Oscillating movement when falling
 		 */
-		Fxp oscillation;
+		Fxp oscillation = 0.0;
 		
 		/** @brief Oscillating movement step when falling
 		 */

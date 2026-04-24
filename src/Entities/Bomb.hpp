@@ -58,7 +58,7 @@ namespace Entities
 
 		/** @brief pulsing animation
 		 */
-		Fxp pulse;
+		Fxp pulse = 0.0;
 	public:
 
 		/** @brief Initializes a new instance of the Bomb class
