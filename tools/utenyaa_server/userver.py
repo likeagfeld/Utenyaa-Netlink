@@ -547,6 +547,21 @@ class UtenyaaServer:
         self.paused = False
         self.match_seconds = MATCH_SECONDS_DEFAULT
 
+        # Live-tunable knobs (admin REST) — experimental tuning surface.
+        # Starting values match the "passthrough default" baseline so the
+        # server behaves identically to an untouched build unless the
+        # operator actively twists a knob. See /api/tune_* endpoints.
+        self.tune = {
+            "relay_player_sync":      True,   # rebroadcast PLAYER_STATE as PLAYER_SYNC
+            "relay_input":            True,   # rebroadcast INPUT_STATE as INPUT_RELAY
+            "crate_respawn_seconds":  CRATE_RESPAWN_SECONDS,
+            "match_seconds_default":  MATCH_SECONDS_DEFAULT,
+            "friendly_fire":          True,   # user-locked ON but toggleable for test
+            "allow_bots_start":       True,   # whether bots alone can meet MIN_TO_START
+            "timer_broadcast_hz":     1,      # MATCH_TIMER broadcasts per second
+            "sudden_death_enabled":   True,
+        }
+
         # Lobby players (keyed by game_pid 0..3, mapped from client user_id)
         self.game_players: dict[int, UtenyaaPlayer] = {}
 
@@ -852,7 +867,7 @@ class UtenyaaServer:
                 if alive_count else 0
             tied = sum(1 for p in self.game_players.values()
                        if p.alive and p.hp == max_hp)
-            if tied > 1 and not self.match.sudden_death:
+            if tied > 1 and not self.match.sudden_death and self.tune.get("sudden_death_enabled", True):
                 self.match.sudden_death = True
                 self._broadcast(build_sudden_death())
                 # Extend timer indefinitely during sudden death
@@ -938,6 +953,7 @@ class UtenyaaServer:
             self._broadcast(build_pause_ack(self.paused))
         elif op == UNET_INPUT_STATE and len(payload) >= 4:
             if self.match is None: return
+            if not self.tune.get("relay_input", True): return
             frame = (payload[1] << 8) | payload[2]
             bits = payload[3]
             self._broadcast(build_input_relay(c.game_pid, frame, bits),
@@ -954,9 +970,10 @@ class UtenyaaServer:
                 p.x, p.y, p.z, p.dx, p.dy, p.dz = x, y, z, dx, dy, dz
                 p.angle = angle
                 p.hp = hp
-            self._broadcast(build_player_sync(c.game_pid, x, y, z, dx, dy, dz,
-                                              angle, hp, p.pickup if p else 0xFF),
-                            exclude_uid=c.user_id)
+            if self.tune.get("relay_player_sync", True):
+                self._broadcast(build_player_sync(c.game_pid, x, y, z, dx, dy, dz,
+                                                  angle, hp, p.pickup if p else 0xFF),
+                                exclude_uid=c.user_id)
         elif op == UNET_CLIENT_FIRE_BULLET and len(payload) >= 1 + 24:
             if self.match is None: return
             x, y, z, dx, dy, dz = struct.unpack("!iiiiii", payload[1:25])
@@ -986,7 +1003,7 @@ class UtenyaaServer:
                     if options:
                         ptype = random.choice(options)
                         crate.active = False
-                        crate.respawn_timer = CRATE_RESPAWN_SECONDS
+                        crate.respawn_timer = self.tune["crate_respawn_seconds"]
                         self._broadcast(build_crate_destroy(slot, c.game_pid, ptype))
                         # Health pickup applies directly
                         p = self.game_players.get(c.game_pid)
@@ -1203,6 +1220,14 @@ class UtenyaaServer:
                     self.end_headers()
                     self.wfile.write(body)
                     return
+                if path.startswith("/api/tune"):
+                    body = json.dumps(server_ref.tune).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 self.send_response(404); self.end_headers()
 
             def do_POST(self):
@@ -1214,6 +1239,39 @@ class UtenyaaServer:
                 if self.path == "/api/end_match":
                     server_ref._admin_cmds.put((server_ref._end_match, (False,)))
                     self.send_response(200); self.end_headers(); return
+                if self.path.startswith("/api/tune/"):
+                    key = self.path[len("/api/tune/"):]
+                    length = int(self.headers.get("Content-Length", "0") or "0")
+                    raw = self.rfile.read(length) if length > 0 else b""
+                    try:
+                        payload = json.loads(raw) if raw else {}
+                    except Exception:
+                        payload = {}
+                    if key in server_ref.tune and "value" in payload:
+                        cur = server_ref.tune[key]
+                        try:
+                            if isinstance(cur, bool):
+                                server_ref.tune[key] = bool(payload["value"])
+                            elif isinstance(cur, int):
+                                server_ref.tune[key] = int(payload["value"])
+                            elif isinstance(cur, float):
+                                server_ref.tune[key] = float(payload["value"])
+                            else:
+                                server_ref.tune[key] = payload["value"]
+                        except Exception:
+                            self.send_response(400); self.end_headers(); return
+                        # Apply match_seconds_default to live match_seconds too
+                        if key == "match_seconds_default":
+                            server_ref.match_seconds = server_ref.tune[key]
+                        log.info("admin tune: %s = %r", key, server_ref.tune[key])
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        body = json.dumps({"key": key, "value": server_ref.tune[key]}).encode()
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                        return
+                    self.send_response(400); self.end_headers(); return
                 self.send_response(404); self.end_headers()
 
         try:
