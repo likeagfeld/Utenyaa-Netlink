@@ -699,7 +699,7 @@ class UtenyaaServer:
         # Leaderboard
         self.leaderboard: dict[str, dict] = {}
         self._lb_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                     "leaderboard.json")
+                                     "utenyaa_leaderboard.json")
         self._load_leaderboard()
 
         # Admin
@@ -713,7 +713,7 @@ class UtenyaaServer:
         # Join history (Flicky pattern — admin portal wants a timeline)
         self._join_history: list = []
         self._join_history_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "join_history.json")
+            os.path.dirname(os.path.abspath(__file__)), "utenyaa_join_history.json")
         self._load_join_history()
 
         self._last_tick = 0.0
