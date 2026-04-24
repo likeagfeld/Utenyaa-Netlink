@@ -1091,9 +1091,15 @@ class UtenyaaServer:
                     c.uuid = existing_uuid
                     c.user_id = uid
                     c.authenticated = True
+                    # Remove the pre-auth negative-key slot for this
+                    # ClientInfo so it isn't in self.clients twice.
+                    for k in list(self.clients.keys()):
+                        if self.clients[k] is c and k != uid:
+                            del self.clients[k]
                     self.clients[uid] = c
                     # Previous username lookup happens via leaderboard or just reuse
                     c.send_raw(build_welcome(uid, existing_uuid, c.username, back=True))
+                    self._broadcast_lobby()
                     return
             # New user — require username
             c.send_raw(build_username_required())
@@ -1112,8 +1118,20 @@ class UtenyaaServer:
                 return
             c.username = name
             c.uuid = str(uuid.uuid4())
-            c.user_id = max([0] + list(self.clients.keys())) + 1
+            # Positive user_id space only — avoid collisions with the
+            # pre-auth negative keys we use for new sockets.
+            positive_keys = [k for k in self.clients.keys() if k >= 0]
+            c.user_id = (max(positive_keys) + 1) if positive_keys else 1
             c.authenticated = True
+            # Remove the pre-auth negative-key slot so this ClientInfo
+            # isn't present in self.clients twice (once as negative,
+            # once as user_id) — LOBBY_STATE would otherwise double-
+            # list the player and the self-row match would pick the
+            # wrong id. Also re-key if we were already present
+            # (reconnect via same socket).
+            for k in list(self.clients.keys()):
+                if self.clients[k] is c and k != c.user_id:
+                    del self.clients[k]
             self.clients[c.user_id] = c
             self.uuid_map[c.uuid] = c.user_id
             c.send_raw(build_welcome(c.user_id, c.uuid, c.username, back=False))

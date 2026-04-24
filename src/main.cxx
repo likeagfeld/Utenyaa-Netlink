@@ -38,8 +38,12 @@ jo_palette* TgaPaletteHandling(void)
 
 int main()
 {
-	jo_core_init(JO_COLOR_Black);
+	// Extend the heap BEFORE jo_core_init — jo_core_init itself allocates
+	// the JO_MAX_SPRITE-sized quad buffer and other pools from jo_malloc,
+	// so the LWRAM extension must be in place when those allocations run.
+	// Flicky's Flock / Disasteroids use the same ordering.
 	jo_add_memory_zone((unsigned char*)UTENYAA_LWRAM_BASE, UTENYAA_LWRAM_HEAP_SIZE);
+	jo_core_init(JO_COLOR_Black);
 	slDynamicFrame(1);
 	Objects::Terrain::InitColliders();
 	IMessageHandler::Init();
@@ -120,6 +124,10 @@ int main()
 
 		if (unet_glue_is_online_screen_active())
 		{
+			// The offline title/menu path leaves the NBG1 logo layer
+			// visible; hide it so online screen text isn't shown on
+			// top of the title graphic.
+			Helpers::HideLogo();
 			slSynch();
 			continue;
 		}
