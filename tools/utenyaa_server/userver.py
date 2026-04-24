@@ -1400,17 +1400,48 @@ class UtenyaaServer:
                     self.send_response(401); self.end_headers(); return
                 path = self.path
                 if path.startswith("/api/state"):
-                    st = {
-                        "uptime_sec": int(time.time() - server_ref._start_time),
-                        "human_clients": server_ref._human_count(),
-                        "bots": len(server_ref.bots),
-                        "match_active": server_ref.match is not None,
+                    # Schema matches the unified saturn-admin portal contract:
+                    # {uptime, total_joins, players[...], game{...}}
+                    # (see /opt/saturn-admin/unified_admin.py header docstring).
+                    players_in_game = len([p for p in server_ref.game_players.values() if p.alive]) \
+                        if server_ref.match else 0
+                    players_list = []
+                    for uid, cc in server_ref.clients.items():
+                        if not cc.authenticated: continue
+                        players_list.append({
+                            "id": uid,
+                            "name": cc.username,
+                            "address": str(cc.address[0]) if cc.address else "?",
+                            "ready": cc.ready,
+                            "in_game": cc.in_game,
+                            "character": cc.character_id,
+                            "stage_vote": cc.stage_vote,
+                        })
+                    for bot in server_ref.bots:
+                        players_list.append({
+                            "id": 200 + bot.index,
+                            "name": bot.name + " (bot)",
+                            "address": "bot",
+                            "ready": True,
+                            "in_game": bot.pid != 0xFF,
+                            "character": bot.character_id,
+                            "stage_vote": bot.stage_vote,
+                        })
+                    game_dict = {
+                        "active":           server_ref.match is not None,
+                        "human_count":      server_ref._human_count(),
+                        "bot_count":        len(server_ref.bots),
+                        "players_in_game":  players_in_game,
+                        "stage":            STAGE_NAMES[server_ref.match.stage_id] if server_ref.match else None,
                         "match_seconds_left": server_ref.match.match_seconds_left if server_ref.match else 0,
-                        "stage": STAGE_NAMES[server_ref.match.stage_id] if server_ref.match else None,
-                        "sudden_death": server_ref.match.sudden_death if server_ref.match else False,
-                        "lobby": server_ref._lobby_roster(),
+                        "sudden_death":     server_ref.match.sudden_death if server_ref.match else False,
                         "stage_vote_tally": server_ref._stage_tally(),
-                        "leaderboard_count": len(server_ref.leaderboard)
+                    }
+                    st = {
+                        "uptime":      int(time.time() - server_ref._start_time),
+                        "total_joins": len(server_ref._join_history),
+                        "players":     players_list,
+                        "game":        game_dict,
                     }
                     body = json.dumps(st).encode()
                     self.send_response(200)
