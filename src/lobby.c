@@ -401,15 +401,20 @@ void lobby_draw(void)
         font_draw_centered("PRESS START WHEN READY", FONT_Y(17), 500);
     }
 
-    /* Last log line */
+    /* Last log line — pad to 38 chars so shorter text doesn't leak
+     * residue from a prior longer line (Disasteroids QA-pass fix). */
     if (nd->log_count > 0) {
-        font_draw(nd->log_lines[nd->log_count - 1],
-                  FONT_X(1), FONT_Y(19), 500);
+        font_printf(FONT_X(1), FONT_Y(19), 500, "%-38s",
+                    nd->log_lines[nd->log_count - 1]);
+    } else {
+        font_draw("                                      ", FONT_X(1), FONT_Y(19), 500);
     }
 
-    /* P2 co-op status */
+    /* P2 co-op status — full-width pad to erase prior state */
     if (g_Game.hasSecondLocal) {
-        font_printf(FONT_X(1), FONT_Y(21), 500, "P2: %-16s", g_Game.playerName2);
+        font_printf(FONT_X(1), FONT_Y(21), 500, "P2: %-34s", g_Game.playerName2);
+    } else {
+        font_draw("                                      ", FONT_X(1), FONT_Y(21), 500);
     }
 
     /* Controls hint — split across 3 lines for readability */

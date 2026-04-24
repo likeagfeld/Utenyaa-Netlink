@@ -289,10 +289,31 @@ static int nth_available_port(int index)
     return -1;
 }
 
+/* Port B / multitap slot 2 detection — matches Flicky's getP2Port(). */
+static int p2_port_detect(void)
+{
+    if (jo_inputs[1].mask && jo_inputs[1].type) return 1;
+    if (jo_inputs[6].mask && jo_inputs[6].type) return 6;
+    return -1;
+}
+
 void OnlineBridge::TickLocalPlayers()
 {
     if (!g_Game.isOnlineMode) return;
     if (g_Game.gameState != UGAME_STATE_GAMEPLAY) return;
+
+    /* Mid-match P2 hot-unplug: if the co-op pad was present but is gone,
+     * tell the server to drop the P2 slot so they appear as dead remotely
+     * instead of a frozen zombie player. Plug-back handled by lobby only
+     * (matches Disasteroids — mid-match re-plug would need a full spawn
+     * cycle). */
+    if (g_Game.hasSecondLocal && p2_port_detect() < 0)
+    {
+        unet_send_remove_local_player();
+        g_Game.hasSecondLocal = false;
+        g_Game.myPlayerID2 = 0xFF;
+        g_Game.playerName2[0] = '\0';
+    }
 
     /* Refresh remote input bits snapshot for each non-local pid. */
     const unet_state_data_t* nd = unet_get_data();

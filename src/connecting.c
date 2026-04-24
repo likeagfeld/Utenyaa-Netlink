@@ -206,12 +206,23 @@ void connecting_draw(void)
     if (g_Game.gameState != UGAME_STATE_CONNECTING) return;
 
     font_draw_centered("CONNECTING", FONT_Y(8), 500);
-    font_draw_centered(g_connect_msg, FONT_Y(14), 500);
+    /* Pad status to 25 chars so shorter messages ("CONNECTED!") don't
+     * leave trailing characters from longer ones ("INITIALIZING MODEM..."). */
+    {
+        char padded[32];
+        int n = 0;
+        while (g_connect_msg[n] && n < 25) { padded[n] = g_connect_msg[n]; n++; }
+        while (n < 25) { padded[n++] = ' '; }
+        padded[n] = '\0';
+        font_draw_centered(padded, FONT_Y(14), 500);
+    }
 
     nd = unet_get_data();
     for (i = 0; i < 4; i++) {
         if (i < nd->log_count) {
-            font_draw(nd->log_lines[i], FONT_X(3), FONT_Y(17 + i), 500);
+            font_printf(FONT_X(3), FONT_Y(17 + i), 500, "%-34s", nd->log_lines[i]);
+        } else {
+            font_draw("                                  ", FONT_X(3), FONT_Y(17 + i), 500);
         }
     }
 
