@@ -12,6 +12,8 @@
 
 #include "Utils\Debug.hpp"
 
+#include "net\utenyaa_main_glue.h"
+
 jo_camera camera;
 int logo;
 
@@ -91,12 +93,26 @@ int main()
 
 	PoneSound::CD::Play(2, 2, true);
 
+	// Online layer init (modem detect, net state machine, font, globals)
+	unet_glue_init();
+
 	Entities::World* worldPtr = nullptr;
 	Fxp startTime = 0.0;
-	
+
 	while (1)
 	{
 		jo_fixed_point_time();
+
+		// Online screens (name entry / connecting / lobby) short-circuit
+		// the offline menu and world. Keep the network state machine
+		// ticking every frame regardless.
+		unet_glue_tick_frame();
+
+		if (unet_glue_is_online_screen_active())
+		{
+			slSynch();
+			continue;
+		}
 
 		static UI::Menu menu;
 		menu.Update();

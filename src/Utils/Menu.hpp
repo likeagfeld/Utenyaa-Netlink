@@ -2,6 +2,7 @@
 
 #include "Settings.hpp"
 #include "UI.hpp"
+#include "../net/utenyaa_main_glue.h"
 
 namespace UI
 {
@@ -66,6 +67,13 @@ namespace UI
             std::string Text() const { return "Credits"; }
             void PerformAction() { currentScreen = Screen::Credits; }
             GoToCredits() : ActionButton(9, 16) {}
+        };
+
+        struct PlayOnline : Settings, ActionButton
+        {
+            std::string Text() const { return "Play Online"; }
+            void PerformAction() { unet_glue_enter_online(); }
+            PlayOnline() : ActionButton(9, 17) {}
         };
 
         // Pause menu
@@ -149,7 +157,7 @@ namespace UI
 
         GUIElement* screens[TotalScreens] =
         {
-            new ButtonGroup<GoToMainMenu, GoToCredits>,
+            new ButtonGroup<GoToMainMenu, PlayOnline, GoToCredits>,
             new ButtonGroup<ReyMe, DannyDuarte, am25, Random, AnriFox>,
             new ButtonGroup<StageSelector, PlayerCountSelector, TimeLimitSelector, GoToIntro, StartGame>,
             new ButtonGroup<Unpause,Quit>,
