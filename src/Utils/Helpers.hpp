@@ -1,6 +1,7 @@
 #pragma once
 
 #include <jo/Jo.hpp>
+#include "../utenyaa_online_bridge.hpp"
 
 struct Helpers
 {
@@ -42,6 +43,25 @@ public:
 	 */
 	inline static bool IsControllerButtonPressed(int controller, jo_gamepad_keys key)
 	{
+		// Online mode: local Saturn's logical controller might be pid 0, 1, 2,
+		// or 3 (server-assigned). Map our own pid(s) back to physical pad
+		// ports 0 (and 1 for co-op). All other pids are remote — their
+		// inputs come from the server relay buffer.
+		if (g_Game.isOnlineMode && g_Game.gameState == UGAME_STATE_GAMEPLAY)
+		{
+			if ((uint8_t)controller == g_Game.myPlayerID)
+			{
+				int port = Helpers::GetNthAvailableController(0);
+				return (port >= 0) && jo_is_input_key_pressed(port, key);
+			}
+			if (g_Game.hasSecondLocal && (uint8_t)controller == g_Game.myPlayerID2)
+			{
+				int port = Helpers::GetNthAvailableController(1);
+				return (port >= 0) && jo_is_input_key_pressed(port, key);
+			}
+			return OnlineBridge::RemoteKeyPressed(controller, key);
+		}
+
 		int input = Helpers::GetNthAvailableController(controller);
 
 		if (input >= 0)
@@ -59,6 +79,21 @@ public:
 	 */
 	inline static bool IsControllerButtonDown(int controller, jo_gamepad_keys key)
 	{
+		if (g_Game.isOnlineMode && g_Game.gameState == UGAME_STATE_GAMEPLAY)
+		{
+			if ((uint8_t)controller == g_Game.myPlayerID)
+			{
+				int port = Helpers::GetNthAvailableController(0);
+				return (port >= 0) && jo_is_input_key_down(port, key);
+			}
+			if (g_Game.hasSecondLocal && (uint8_t)controller == g_Game.myPlayerID2)
+			{
+				int port = Helpers::GetNthAvailableController(1);
+				return (port >= 0) && jo_is_input_key_down(port, key);
+			}
+			return OnlineBridge::RemoteKeyDown(controller, key);
+		}
+
 		int input = Helpers::GetNthAvailableController(controller);
 
 		if (input >= 0)

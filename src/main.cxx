@@ -13,6 +13,7 @@
 #include "Utils\Debug.hpp"
 
 #include "net\utenyaa_main_glue.h"
+#include "utenyaa_online_bridge.hpp"
 
 jo_camera camera;
 int logo;
@@ -95,6 +96,7 @@ int main()
 
 	// Online layer init (modem detect, net state machine, font, globals)
 	unet_glue_init();
+	OnlineBridge::Install();
 
 	Entities::World* worldPtr = nullptr;
 	Fxp startTime = 0.0;
@@ -126,6 +128,21 @@ int main()
 			Settings::GameEnded = false;
 		}
 
+		// Online lobby transitioned us into gameplay — sync Settings so
+		// the existing offline code path spins up World correctly, and
+		// seed RNG from the server's match seed for deterministic crate
+		// pickup rolls / cosmetic random state across peers.
+		if (g_Game.isOnlineMode && g_Game.gameState == UGAME_STATE_GAMEPLAY
+			&& !Settings::IsActive)
+		{
+			const unet_state_data_t* nd = unet_get_data();
+			Settings::SelectedStage = nd->stage_id;
+			Settings::TotalSeconds = nd->match_seconds_total;
+			Settings::PlayerCount = nd->opponent_count;
+			jo_random_seed = nd->game_seed ? nd->game_seed : 1;
+			Settings::IsActive = true;
+		}
+
 		if (Settings::IsActive)
 		{
 
@@ -137,6 +154,9 @@ int main()
 				PoneSound::CD::Play(3, 3, true);
 			}
 			slUnitMatrix(0);
+
+			// Send local pad input + player state to server during online play
+			OnlineBridge::TickLocalPlayers();
 
 			// Update entities
 			for (auto* object : IUpdatable::objects) object->Update();

@@ -20,6 +20,9 @@
 
 #include "..\Utils\Helpers.hpp"
 
+#include "..\net\utenyaa_net.h"
+#include "..\net\utenyaa_game.h"
+
 namespace Entities
 {
 	/** @brief Static 3D detail
@@ -89,25 +92,50 @@ namespace Entities
 				Fxp::BuildRaw(slSin(angle)),
 				0.0);
 
+			// Local-only: drive weapon fire for controllers this Saturn owns.
+			// In online mode, remote players get their projectiles via
+			// server BULLET_SPAWN/MINE_SPAWN/BOMB_SPAWN broadcasts (see
+			// utenyaa_online_bridge.cxx), so skip input-triggered fire for
+			// non-local controllers here to avoid double-spawning.
+			const bool isLocalCtrl = (!g_Game.isOnlineMode) ||
+				((uint8_t)this->controller == g_Game.myPlayerID) ||
+				(g_Game.hasSecondLocal && (uint8_t)this->controller == g_Game.myPlayerID2);
+
 			// Do the shooting
-			if (Helpers::IsControllerButtonDown(this->controller, JO_KEY_A) && this->shootCoolDownTimeLeft == 0)
+			if (isLocalCtrl &&
+				Helpers::IsControllerButtonDown(this->controller, JO_KEY_A) &&
+				this->shootCoolDownTimeLeft == 0)
 			{
 				PoneSound::Sound::Play(1, PoneSound::PlayMode::Semi, 5);
 				this->shootCoolDownTimeLeft = 0x1b;
 				new Entities::Bullet(this->controller, movementDir, this->position);
+				if (g_Game.isOnlineMode)
+				{
+					unet_send_fire_bullet(
+						this->position.x.Value(), this->position.y.Value(), this->position.z.Value(),
+						movementDir.x.Value(), movementDir.y.Value(), movementDir.z.Value());
+				}
 			}
 
 			// Use pickup
-			if (Helpers::IsControllerButtonDown(this->controller, JO_KEY_B))
+			if (isLocalCtrl && Helpers::IsControllerButtonDown(this->controller, JO_KEY_B))
 			{
 				switch (this->hasPickup)
 				{
 				case Messages::Pickup::PickupType::Mine:
 					new Mine(this->controller, this->position);
+					if (g_Game.isOnlineMode)
+						unet_send_drop_mine(this->position.x.Value(),
+											this->position.y.Value(),
+											this->position.z.Value());
 					break;
-				
+
 				case Messages::Pickup::PickupType::Bomb:
 					new Bomb(movementDir, this->position);
+					if (g_Game.isOnlineMode)
+						unet_send_throw_bomb(
+							this->position.x.Value(), this->position.y.Value(), this->position.z.Value(),
+							movementDir.x.Value(), movementDir.y.Value(), movementDir.z.Value());
 					break;
 
 				default:
