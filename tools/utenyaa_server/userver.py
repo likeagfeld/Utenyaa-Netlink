@@ -1157,18 +1157,29 @@ class UtenyaaServer:
                             exclude_uid=c.user_id)
         elif op == UNET_PLAYER_STATE:
             if self.match is None: return
-            # 1 op + 24 fxp bytes + 2 angle + 1 hp = 28
-            if len(payload) < 28: return
-            x, y, z, dx, dy, dz = struct.unpack("!iiiiii", payload[1:25])
-            angle = struct.unpack("!h", payload[25:27])[0]
-            hp = payload[27]
-            p = self.game_players.get(c.game_pid)
+            # P1 format: op(1) + 6×i32(24) + angle(i16) + hp(1) = 28 bytes
+            # P2 format: op(1) + pid(1) + 6×i32(24) + angle(i16) + hp(1) = 29 bytes
+            # Dispatch by length — client sends the P2 variant via
+            # unet_send_player_state_p2() which prepends the co-op pid.
+            if len(payload) == 29:
+                target_pid = payload[1]
+                x, y, z, dx, dy, dz = struct.unpack("!iiiiii", payload[2:26])
+                angle = struct.unpack("!h", payload[26:28])[0]
+                hp = payload[28]
+            elif len(payload) >= 28:
+                target_pid = c.game_pid
+                x, y, z, dx, dy, dz = struct.unpack("!iiiiii", payload[1:25])
+                angle = struct.unpack("!h", payload[25:27])[0]
+                hp = payload[27]
+            else:
+                return
+            p = self.game_players.get(target_pid)
             if p:
                 p.x, p.y, p.z, p.dx, p.dy, p.dz = x, y, z, dx, dy, dz
                 p.angle = angle
                 p.hp = hp
             if self.tune.get("relay_player_sync", True):
-                self._broadcast(build_player_sync(c.game_pid, x, y, z, dx, dy, dz,
+                self._broadcast(build_player_sync(target_pid, x, y, z, dx, dy, dz,
                                                   angle, hp, p.pickup if p else 0xFF),
                                 exclude_uid=c.user_id)
         elif op == UNET_CLIENT_FIRE_BULLET and len(payload) >= 1 + 24:

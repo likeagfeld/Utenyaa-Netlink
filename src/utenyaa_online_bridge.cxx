@@ -67,6 +67,7 @@ static uint8_t poll_local_bits_for_port(int port)
 
 bool OnlineBridge::RemoteKeyDown(int controller, jo_gamepad_keys key)
 {
+    if (controller < 0 || controller >= UNET_MAX_PLAYERS) return false;
     uint8_t bit = key_to_bit(key);
     if (!bit) return false;
     return (s_last_remote_bits[controller] & bit) != 0;
@@ -74,10 +75,24 @@ bool OnlineBridge::RemoteKeyDown(int controller, jo_gamepad_keys key)
 
 bool OnlineBridge::RemoteKeyPressed(int controller, jo_gamepad_keys key)
 {
+    if (controller < 0 || controller >= UNET_MAX_PLAYERS) return false;
     uint8_t bit = key_to_bit(key);
     if (!bit) return false;
-    return (s_last_remote_bits[controller] & bit) != 0;
+    /* Edge-trigger: held now AND not held previous frame. */
+    return ((s_last_remote_bits[controller] & bit) != 0) &&
+           ((s_prev_remote_bits[controller] & bit) == 0);
 }
+
+/*============================================================================
+ * File-scope state used by callbacks + tick functions (defined here so
+ * both cb_* handlers below and TickLocalPlayers later in the file can
+ * read/write them without forward declarations).
+ *============================================================================*/
+
+static int  s_player_state_cooldown;
+static int  s_player_state_cooldown_p2;
+static bool s_sent_death;
+static bool s_sent_death_p2;
 
 /*============================================================================
  * Server → client event callbacks
@@ -137,7 +152,10 @@ static void cb_explosion(int32_t x, int32_t y, int32_t z, uint16_t /*radius*/,
     Fxp scale = Fxp::FromInt(1);
     new Entities::Explosion(pos, scale);
 
-    /* Apply server-resolved damage to named victims. */
+    /* Apply server-resolved damage to named victims. Clamp to the static
+     * buffer size (UNET_MAX_PLAYERS * 2) defensively — the net layer
+     * already clamps victim_count, this is belt-and-suspenders. */
+    if (victim_count > UNET_MAX_PLAYERS) victim_count = UNET_MAX_PLAYERS;
     for (int i = 0; i < victim_count; i++)
     {
         uint8_t pid = victims[i * 2];
@@ -223,7 +241,12 @@ static void cb_game_over(uint8_t winner_id, bool sudden)
     s_match_end_pending = true;
     s_match_end_timer = MATCH_END_FRAMES;
     /* Intentionally do NOT flip gameState here — TickMatchEndPause
-     * handles that after the display window. */
+     * handles that after the display window. Clear local death-send
+     * and cooldown state so the next match starts clean. */
+    s_sent_death = false;
+    s_sent_death_p2 = false;
+    s_player_state_cooldown = 0;
+    s_player_state_cooldown_p2 = 0;
 }
 
 void OnlineBridge::Install()
@@ -247,10 +270,7 @@ void OnlineBridge::Install()
  * Per-frame: poll local pads, send delta-compressed inputs + state sync
  *============================================================================*/
 
-static int s_player_state_cooldown = 0;
-static int s_player_state_cooldown_p2 = 0;
-static bool s_sent_death = false;
-static bool s_sent_death_p2 = false;
+/* s_player_state_cooldown / s_sent_death defined near top of file. */
 
 static void tick_one_local_pid(uint8_t pid, int pad_port, bool is_p2)
 {
@@ -317,6 +337,29 @@ void OnlineBridge::TickLocalPlayers()
 {
     if (!g_Game.isOnlineMode) return;
     if (g_Game.gameState != UGAME_STATE_GAMEPLAY) return;
+
+    /* Rising-edge of gameplay: reset match-end bridge state that may
+     * have stuck "true" if a prior match-end pause was interrupted
+     * (e.g., disconnect/reconnect/new match). Avoids a ghost
+     * "RETURNING TO LOBBY" banner on fresh matches. */
+    static uint32_t s_last_game_seed = 0;
+    uint32_t seed_now = unet_get_data()->game_seed;
+    if (seed_now != 0 && seed_now != s_last_game_seed)
+    {
+        s_last_game_seed = seed_now;
+        s_match_end_pending = false;
+        s_match_end_timer = 0;
+        s_match_end_winner = 0xFF;
+        s_match_end_sudden = false;
+        s_sent_death = false;
+        s_sent_death_p2 = false;
+        s_player_state_cooldown = 0;
+        s_player_state_cooldown_p2 = 0;
+        for (int i = 0; i < UNET_MAX_PLAYERS; i++) {
+            s_prev_remote_bits[i] = 0;
+            s_last_remote_bits[i] = 0;
+        }
+    }
 
     /* Mid-match P2 hot-unplug: if the co-op pad was present but is gone,
      * tell the server to drop the P2 slot so they appear as dead remotely
