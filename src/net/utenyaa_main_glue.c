@@ -211,6 +211,17 @@ void unet_glue_tick_frame(void)
     /* Network state machine (runs every frame once transport is live) */
     unet_tick();
 
+    /* Sync C++-side g_Game.myPlayerID from the net state as soon as
+     * WELCOME arrives (server-assigned pid). Previously this only
+     * synced when entering GAMEPLAY, so the lobby's self-row marker
+     * couldn't find its own id in LOBBY_STATE. */
+    {
+        const unet_state_data_t* nd = unet_get_data();
+        if (nd->my_player_id != 0xFF && g_Game.myPlayerID != nd->my_player_id) {
+            g_Game.myPlayerID = nd->my_player_id;
+        }
+    }
+
     /* Screen dispatch by gameState */
     switch (g_Game.gameState) {
     case UGAME_STATE_NAME_ENTRY:

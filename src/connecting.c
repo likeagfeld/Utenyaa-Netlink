@@ -46,10 +46,14 @@ void connecting_init(void)
     g_connect_msg = "PREPARING...";
     g_connect_timer = 0;
 
-    /* jo_audio_stop_cd is part of Jo's audio module which isn't enabled
-     * in this build (Utenyaa uses PoneSound for CD). No explicit stop
-     * needed — the next PoneSound::CD::Play call overrides. */
     jo_clear_screen();
+
+    /* Defensively drop any residual modem carrier from a prior session
+     * so modem_dial later on doesn't get NO_DIALTONE / BUSY because the
+     * modem is still off-hook. Fails silently if nothing's connected. */
+    if (g_modem_detected) {
+        modem_hangup(&g_uart);
+    }
 
     unet_init();
     unet_set_modem_available(g_modem_detected);
@@ -63,9 +67,11 @@ void connecting_input(void)
     if (jo_is_pad1_key_pressed(JO_KEY_B)) {
         if (!g_Game.input.pressedLT) {
             unet_send_disconnect();
+            modem_hangup(&g_uart);
             jo_clear_screen();
             g_Game.input.pressedABC = true;
             g_Game.titleScreenChoice = 2;
+            g_Game.isOnlineMode = false;
             g_Game.gameState = UGAME_STATE_TITLE_SCREEN;
         }
         g_Game.input.pressedLT = true;

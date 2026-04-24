@@ -24,6 +24,10 @@
 #include "font.h"
 #include "net/utenyaa_game.h"
 #include "net/utenyaa_net.h"
+#include "net/saturn_uart16550.h"
+#include "net/modem.h"
+
+extern saturn_uart16550_t g_uart;
 
 /*============================================================================
  * Edge-tracking state
@@ -149,12 +153,18 @@ void lobby_input(void)
         g_Game.input.pressedStart = false;
     }
 
-    /* B = back to title, stay connected */
+    /* B = back to title AND disconnect modem so user can re-dial.
+     * Earlier this path tried to "stay connected for quick rejoin" but
+     * that left the modem carrier up and the re-dial logic refused to
+     * reuse it. Simpler + less broken to always hang up. */
     if (jo_is_pad1_key_pressed(JO_KEY_B)) {
         if (!g_Game.input.pressedLT) {
+            unet_send_disconnect();
+            modem_hangup(&g_uart);
             jo_clear_screen();
             g_Game.input.pressedABC = true;
             g_Game.titleScreenChoice = 2;
+            g_Game.isOnlineMode = false;
             g_Game.gameState = UGAME_STATE_TITLE_SCREEN;
         }
         g_Game.input.pressedLT = true;
@@ -162,13 +172,16 @@ void lobby_input(void)
         g_Game.input.pressedLT = false;
     }
 
-    /* Y = disconnect entirely */
+    /* Y = disconnect entirely (same as B now — dedicated hangup kept
+     * for muscle memory / symmetry with Flicky & Disasteroids). */
     if (jo_is_pad1_key_pressed(JO_KEY_Y)) {
         if (!g_Game.input.pressedRT) {
             unet_send_disconnect();
+            modem_hangup(&g_uart);
             jo_clear_screen();
             g_Game.input.pressedABC = true;
             g_Game.titleScreenChoice = 2;
+            g_Game.isOnlineMode = false;
             g_Game.gameState = UGAME_STATE_TITLE_SCREEN;
         }
         g_Game.input.pressedRT = true;

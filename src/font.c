@@ -20,10 +20,13 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-/* Keep font_load as a no-op so any call-site that invokes it still links. */
+/* Raise NBG0 text-plane priority so jo_printf output is actually
+ * visible. Utenyaa's main.cxx calls jo_core_set_screens_order with
+ * only NBG1 + SPRITE, which leaves NBG0 at priority 0 (hidden).
+ * Called from lazy online init so offline is untouched. */
 void font_load(void)
 {
-    /* VDP2 NBG text is set up by jo_core_init — nothing to do here. */
+    slPriorityNbg0(7);  /* top priority; above NBG1 logo (if any) + sprites */
 }
 
 /* jo_printf uses a 40-col × 28-row text grid. Our API takes VDP1
