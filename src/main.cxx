@@ -29,20 +29,19 @@ jo_palette* TgaPaletteHandling(void)
 	return (&titleScreen);
 }
 
-// Extend the jo_malloc heap with 256 KB of LWRAM up front so the
-// 123 KB LOGO.TGA load + 256-sprite quad pool + PAK texture decoding +
-// backup-RAM file I/O all fit without OOM. Matches what Disasteroids
-// and Flicky's Flock do (they hit the same limit for their own assets).
-#define UTENYAA_LWRAM_BASE      0x00200000u
-#define UTENYAA_LWRAM_HEAP_SIZE 0x00040000u   // 256 KB
+// JO_GLOBAL_MEMORY_SIZE_FOR_MALLOC is bumped in the makefile to give
+// jo_core_init + LOGO.TGA (123 KB) + sound buffers + PAK textures +
+// backup-RAM I/O enough contiguous pool headroom.
+//
+// Earlier attempts used jo_add_memory_zone(LWRAM, 256KB) — a pattern
+// that works for Flicky/Disasteroids but NOT for Utenyaa because SGL
+// (used extensively here, not in the other two forks) reserves LWRAM
+// for its DMA/matrix workspace. jo_add_memory_zone memsets the region
+// to zero as part of registration, which corrupts SGL state and
+// black-screens the boot after the SEGA logo. Don't touch LWRAM.
 
 int main()
 {
-	// Extend the heap BEFORE jo_core_init — jo_core_init itself allocates
-	// the JO_MAX_SPRITE-sized quad buffer and other pools from jo_malloc,
-	// so the LWRAM extension must be in place when those allocations run.
-	// Flicky's Flock / Disasteroids use the same ordering.
-	jo_add_memory_zone((unsigned char*)UTENYAA_LWRAM_BASE, UTENYAA_LWRAM_HEAP_SIZE);
 	jo_core_init(JO_COLOR_Black);
 	slDynamicFrame(1);
 	Objects::Terrain::InitColliders();
