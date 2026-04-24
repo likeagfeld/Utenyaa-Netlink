@@ -331,9 +331,37 @@ namespace Entities
 		 */
 		void GetBounds(AABB* result) override
 		{
-			*result = AABB(
-				this->position,
-				Vec3(Player::Size, Player::Size, Player::Size));
+			// Online mode: expand hitbox by NET_COLLISION_PAD (3 units in
+			// Fxp 16.16 = 3.0 world units) to compensate for remote
+			// position desync. Matches the Disasteroids fix: otherwise a
+			// bullet can visually pass through a remote tank when their
+			// snapshot is 2-3 frames stale compared to the shooter.
+			if (g_Game.isOnlineMode)
+			{
+				Fxp paddedSize = Player::Size + Fxp::FromInt(3);
+				*result = AABB(this->position, Vec3(paddedSize, paddedSize, paddedSize));
+			}
+			else
+			{
+				*result = AABB(this->position, Vec3(Player::Size, Player::Size, Player::Size));
+			}
+		}
+
+		/** @brief Apply a server-authoritative snapshot (remote players only).
+		 *  Called from OnlineBridge::ApplyRemoteSnapshots each frame after
+		 *  PLAYER_SYNC decode. Performs 50% lerp toward server position and
+		 *  +3-frame extrapolation along the server velocity to reduce
+		 *  visible jitter from network latency (Disasteroids pattern). */
+		void ApplyNetworkSnapshot(const Vec3& serverPos, const Vec3& serverVel,
+								  const Fxp& serverAngle, int16_t serverHp)
+		{
+			// 50% lerp — halfway toward server pos.
+			Vec3 diff = serverPos - this->position;
+			this->position = this->position + (diff * Fxp(0.5));
+			// Extrapolate +3 frames along server velocity.
+			this->position = this->position + (serverVel * Fxp(3));
+			this->angle = serverAngle;
+			this->health = serverHp;
 		}
 
 		/** @brief Handle messages sent to this entity
@@ -392,10 +420,18 @@ namespace Entities
 				this->shootCoolDownTimeLeft--;
 			}
 
+			// In online mode, remote players receive their position via
+			// OnlineBridge::ApplyRemoteSnapshots (server PLAYER_SYNC with
+			// lerp+extrapolate). Don't let local HandleMovement drift
+			// their position from relay-buffer inputs — true passthrough.
+			const bool isRemoteOnline = g_Game.isOnlineMode &&
+				((uint8_t)this->controller != g_Game.myPlayerID) &&
+				!(g_Game.hasSecondLocal && (uint8_t)this->controller == g_Game.myPlayerID2);
+
 			// Allow player to do actions only if alive and controller is connected
 			if (this->IsColliderEnabled() && this->health > 0)
 			{
-				this->HandleMovement();
+				if (!isRemoteOnline) this->HandleMovement();
 				this->HandleActions();
 			}
 

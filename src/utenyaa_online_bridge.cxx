@@ -14,6 +14,8 @@
 #include "Utils/Message.hpp"
 #include "Messages/Damage.hpp"
 #include "Messages/Pickup.hpp"
+#include "font.h"
+#include "Utils/UI.hpp"
 
 /*============================================================================
  * Remote key state tracking (for edge detection)
@@ -183,12 +185,37 @@ static void cb_player_kill(uint8_t /*victim_id*/, uint8_t /*attacker_id*/)
     /* Offline path already handles death via HP<=0; nothing extra needed. */
 }
 
-static void cb_match_timer(uint16_t /*seconds_remaining*/) {}
-static void cb_sudden_death(void) {}
-static void cb_game_over(uint8_t /*winner_id*/, bool /*sudden*/)
+static void cb_match_timer(uint16_t seconds_remaining)
 {
-    /* Flip gameState back to lobby; the server already demoted us. */
-    g_Game.gameState = UGAME_STATE_LOBBY;
+    /* Route server-authoritative timer into the HUD so P1/P2 Saturns
+     * can't drift based on local delta_time. */
+    UI::HudHandler.HandleMessages(UI::Messages::UpdateTime((int)seconds_remaining));
+}
+
+static void cb_sudden_death(void)
+{
+    /* Banner is rendered by DrawGameplayOverlay while nd->sudden_death
+     * is true. No-op here — the net state data already holds the flag. */
+}
+
+/* Game-over pause: freeze gameplay render for N frames showing a
+ * "WINNER" banner before returning to lobby. The server has already
+ * transitioned us in the net state machine; we only delay the C++
+ * gameState flip. */
+static int  s_match_end_timer = 0;
+static bool s_match_end_pending = false;
+static uint8_t s_match_end_winner = 0xFF;
+static bool s_match_end_sudden = false;
+#define MATCH_END_FRAMES 300   /* ~5s @ 60fps */
+
+static void cb_game_over(uint8_t winner_id, bool sudden)
+{
+    s_match_end_winner = winner_id;
+    s_match_end_sudden = sudden;
+    s_match_end_pending = true;
+    s_match_end_timer = MATCH_END_FRAMES;
+    /* Intentionally do NOT flip gameState here — TickMatchEndPause
+     * handles that after the display window. */
 }
 
 void OnlineBridge::Install()
@@ -286,4 +313,149 @@ void OnlineBridge::TickLocalPlayers()
     {
         tick_one_local_pid(g_Game.myPlayerID2, nth_available_port(1), true);
     }
+}
+
+/*============================================================================
+ * Apply server PLAYER_SYNC snapshots to remote C++ Players each frame
+ *============================================================================*/
+
+void OnlineBridge::ApplyRemoteSnapshots()
+{
+    if (!g_Game.isOnlineMode) return;
+    if (g_Game.gameState != UGAME_STATE_GAMEPLAY) return;
+
+    const unet_state_data_t* nd = unet_get_data();
+    for (uint8_t pid = 0; pid < UNET_MAX_PLAYERS; pid++)
+    {
+        if (pid == g_Game.myPlayerID) continue;
+        if (g_Game.hasSecondLocal && pid == g_Game.myPlayerID2) continue;
+        if (!nd->remote_players[pid].valid) continue;
+
+        Entities::Player* p = find_player_by_pid(pid);
+        if (!p) continue;
+
+        Vec3 pos = fxp_vec(nd->remote_players[pid].x,
+                           nd->remote_players[pid].y,
+                           nd->remote_players[pid].z);
+        Vec3 vel = fxp_vec(nd->remote_players[pid].dx,
+                           nd->remote_players[pid].dy,
+                           nd->remote_players[pid].dz);
+        Fxp angle = Fxp::BuildRaw((int32_t)nd->remote_players[pid].angle << 8);
+        p->ApplyNetworkSnapshot(pos, vel, angle, (int16_t)nd->remote_players[pid].health);
+    }
+}
+
+/*============================================================================
+ * Spectator follow-winner
+ *============================================================================*/
+
+bool OnlineBridge::LocalIsDeadSpectator()
+{
+    if (!g_Game.isOnlineMode) return false;
+    if (g_Game.myPlayerID == 0xFF) return false;
+    Entities::Player* me = find_player_by_pid(g_Game.myPlayerID);
+    return me && me->GetHealth() <= 0;
+}
+
+uint8_t OnlineBridge::GetSpectatorTargetPid()
+{
+    const unet_state_data_t* nd = unet_get_data();
+    uint8_t best = 0xFF;
+    int best_score = -1;
+    for (uint8_t pid = 0; pid < UNET_MAX_PLAYERS; pid++)
+    {
+        if (pid == g_Game.myPlayerID) continue;
+        int sc = -1;
+        Entities::Player* p = find_player_by_pid(pid);
+        if (p && p->GetHealth() > 0)
+            sc = p->GetHealth() * 100 + (int)nd->score_kills[pid];
+        else
+            sc = (int)nd->score_kills[pid];
+        if (sc > best_score) { best_score = sc; best = pid; }
+    }
+    return best;
+}
+
+/*============================================================================
+ * HUD overlay during online gameplay
+ *============================================================================*/
+
+void OnlineBridge::DrawGameplayOverlay()
+{
+    if (!g_Game.isOnlineMode) return;
+    if (g_Game.gameState != UGAME_STATE_GAMEPLAY) return;
+
+    const unet_state_data_t* nd = unet_get_data();
+
+    /* Server-broadcast timer at top */
+    font_printf_centered(FONT_Y(1), 600, "TIME %02d:%02d",
+                         (int)nd->match_seconds_left / 60,
+                         (int)nd->match_seconds_left % 60);
+
+    /* SUDDEN DEATH banner */
+    if (nd->sudden_death)
+    {
+        font_draw_centered("*** SUDDEN DEATH ***", FONT_Y(3), 600);
+    }
+
+    /* Dead-player spectator indicator */
+    if (LocalIsDeadSpectator() && !s_match_end_pending)
+    {
+        uint8_t target = GetSpectatorTargetPid();
+        if (target != 0xFF)
+        {
+            font_printf_centered(FONT_Y(25), 600,
+                                 "SPECTATING: %-16s",
+                                 nd->game_roster[target].active
+                                    ? nd->game_roster[target].name : "LEADER");
+        }
+        else
+        {
+            font_draw_centered("ELIMINATED", FONT_Y(25), 600);
+        }
+    }
+
+    /* Match-end results banner */
+    if (s_match_end_pending)
+    {
+        const char* wname = "---";
+        if (s_match_end_winner < UNET_MAX_PLAYERS &&
+            nd->game_roster[s_match_end_winner].active)
+            wname = nd->game_roster[s_match_end_winner].name;
+
+        font_draw_centered(s_match_end_sudden ? "SUDDEN DEATH OVER" : "MATCH OVER",
+                           FONT_Y(10), 600);
+        font_printf_centered(FONT_Y(12), 600, "WINNER: %s", wname);
+
+        /* Per-player result strip */
+        for (int i = 0; i < nd->game_roster_count && i < UNET_MAX_PLAYERS; i++)
+        {
+            if (!nd->game_roster[i].active) continue;
+            uint8_t pid = nd->game_roster[i].id;
+            font_printf_centered(FONT_Y(14 + i), 600,
+                "%c %-12s HP:%d  K:%d  D:%d",
+                pid == s_match_end_winner ? '*' : ' ',
+                nd->game_roster[i].name,
+                (int)nd->last_scores_hp[pid],
+                (int)nd->last_scores_kills[pid],
+                (int)nd->last_scores_deaths[pid]);
+        }
+        font_printf_centered(FONT_Y(24), 600,
+                             "RETURNING TO LOBBY... %d",
+                             (s_match_end_timer + 59) / 60);
+    }
+}
+
+/*============================================================================
+ * Match-end countdown — advances s_match_end_timer and flips gameState
+ *============================================================================*/
+
+void OnlineBridge::TickMatchEndPause()
+{
+    if (!s_match_end_pending) return;
+    if (s_match_end_timer > 0) { s_match_end_timer--; return; }
+
+    /* Countdown done — hand off to lobby. */
+    s_match_end_pending = false;
+    g_Game.gameState = UGAME_STATE_LOBBY;
 }

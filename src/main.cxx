@@ -128,6 +128,22 @@ int main()
 			Settings::GameEnded = false;
 		}
 
+		// Online match ended — TickMatchEndPause flipped gameState to LOBBY.
+		// Tear down the active world so main re-enters the online screen
+		// dispatch path (lobby_draw) on the next iteration.
+		if (g_Game.isOnlineMode && g_Game.gameState == UGAME_STATE_LOBBY
+			&& Settings::IsActive)
+		{
+			Settings::IsActive = false;
+			Settings::GameEnded = false;
+			if (worldPtr)
+			{
+				for (auto* object : IRenderable::objects) delete object;
+				worldPtr = nullptr;
+			}
+			PoneSound::CD::Play(2, 2, true);
+		}
+
 		// Online lobby transitioned us into gameplay — sync Settings so
 		// the existing offline code path spins up World correctly, and
 		// seed RNG from the server's match seed for deterministic crate
@@ -161,6 +177,31 @@ int main()
 			// Update entities
 			for (auto* object : IUpdatable::objects) object->Update();
 
+			// Apply server PLAYER_SYNC snapshots to remote players AFTER their
+			// Update() so the overwrite is authoritative this frame (lerp+extrap).
+			OnlineBridge::ApplyRemoteSnapshots();
+
+			// Match-end countdown. Also: follow-winner spectator aim.
+			OnlineBridge::TickMatchEndPause();
+
+			if (g_Game.isOnlineMode && OnlineBridge::LocalIsDeadSpectator())
+			{
+				uint8_t tgt = OnlineBridge::GetSpectatorTargetPid();
+				if (tgt != 0xFF)
+				{
+					for (auto* obj : TrackableObject<Entities::Player>::objects)
+					{
+						if ((uint8_t)obj->GetController() == tgt)
+						{
+							const Vec3& tp = obj->GetPosition();
+							jo_3d_camera_set_target(&camera,
+								tp.x.Value() >> 16, tp.y.Value() >> 16, 0);
+							break;
+						}
+					}
+				}
+			}
+
 			jo_3d_camera_look_at(&camera);
 			jo_3d_push_matrix();
 			{
@@ -174,6 +215,9 @@ int main()
 
 			Helpers::HideLogo();
 
+			// Online HUD overlay (match timer, sudden death, spectator, results)
+			OnlineBridge::DrawGameplayOverlay();
+
 			int alive = 0;
 
 			for (auto* object : TrackableObject<Entities::Player>::objects)
@@ -182,9 +226,11 @@ int main()
 				{
 					alive++;
 				}
-			}	
+			}
 
-			if (startTime <= 0.0 || alive <= 1)
+			// In online mode the server decides match-over, not local
+			// HP/timer — skip the offline end-of-match branch entirely.
+			if (!g_Game.isOnlineMode && (startTime <= 0.0 || alive <= 1))
 			{
 				// Show match results
 				Settings::IsActive = false;

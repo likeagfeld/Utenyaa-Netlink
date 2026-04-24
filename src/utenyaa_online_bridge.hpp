@@ -58,4 +58,31 @@ struct OnlineBridge
      *  Saturn-owned player. Also sends CLIENT_FIRE_BULLET / DROP_MINE /
      *  THROW_BOMB when the local player triggers those actions. */
     static void TickLocalPlayers();
+
+    /** Called each frame AFTER IUpdatable::Update() in online gameplay.
+     *  Reads the latest PLAYER_SYNC snapshot for each remote pid from
+     *  the net layer and applies it to the matching C++ Player with
+     *  50% lerp + 3-frame velocity extrapolation. */
+    static void ApplyRemoteSnapshots();
+
+    /** Gameplay HUD overlay: online-only text (SUDDEN DEATH banner,
+     *  server match timer, spectator hint when local player is dead,
+     *  game-over results pause banner). Drawn each frame during the
+     *  online gameplay branch of main's while loop. */
+    static void DrawGameplayOverlay();
+
+    /** Manage match-end UX state: when the server sends GAME_OVER we
+     *  don't rip the player back to lobby instantly. This runs a
+     *  countdown frame-by-frame, keeps the world rendered behind a
+     *  "WINNER: ..." banner for a few seconds, then transitions. */
+    static void TickMatchEndPause();
+
+    /** For spectator follow-winner: returns the pid of the player to
+     *  aim the camera at (top HP · kills tiebreaker). 0xFF if no
+     *  valid target. */
+    static uint8_t GetSpectatorTargetPid();
+
+    /** True when the local player (myPlayerID) has HP<=0 — i.e. we
+     *  should be in spectator follow-winner mode. */
+    static bool LocalIsDeadSpectator();
 };
