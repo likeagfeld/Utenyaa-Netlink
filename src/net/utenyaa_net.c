@@ -60,8 +60,10 @@ static void tx(const uint8_t* buf, int len)
 
 void unet_init(void)
 {
+    /* Preserve g_cb across reinit — callbacks are set once at startup
+     * by OnlineBridge::Install() and must survive any subsequent
+     * unet_init() called when the user enters the online flow. */
     memset(&g_net, 0, sizeof(g_net));
-    memset(&g_cb, 0, sizeof(g_cb));
     g_net.state = UNET_STATE_OFFLINE;
     g_net.my_player_id = 0xFF;
     g_net.my_player_id2 = 0xFF;
@@ -252,7 +254,8 @@ static void on_game_start(const uint8_t* p, int len)
     if (off < len) {
         cc = p[off++];
         if (cc > UNET_MAX_CRATES) cc = UNET_MAX_CRATES;
-        for (i = 0; i < cc && off + 13 <= len; i++) {
+        /* Each entry is 14 bytes: slot(1) + x(4) + y(4) + z(4) + flags(1). */
+        for (i = 0; i < cc && off + 14 <= len; i++) {
             g_net.crates[i].slot  = p[off++];
             g_net.crates[i].x     = unet_r_i32(&p[off]); off += 4;
             g_net.crates[i].y     = unet_r_i32(&p[off]); off += 4;
@@ -282,7 +285,8 @@ static void on_game_start(const uint8_t* p, int len)
 static void on_player_sync(const uint8_t* p, int len)
 {
     uint8_t pid;
-    if (len < 32) return;
+    /* Payload: op(1) + pid(1) + 6×i32(24) + i16(2) + hp(1) + pickup(1) = 30 */
+    if (len < 30) return;
     pid = p[1];
     if (pid >= UNET_MAX_PLAYERS) return;
     g_net.remote_players[pid].x      = unet_r_i32(&p[2]);

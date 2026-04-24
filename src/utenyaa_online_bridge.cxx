@@ -249,6 +249,8 @@ void OnlineBridge::Install()
 
 static int s_player_state_cooldown = 0;
 static int s_player_state_cooldown_p2 = 0;
+static bool s_sent_death = false;
+static bool s_sent_death_p2 = false;
 
 static void tick_one_local_pid(uint8_t pid, int pad_port, bool is_p2)
 {
@@ -347,6 +349,35 @@ void OnlineBridge::TickLocalPlayers()
     if (g_Game.hasSecondLocal)
     {
         tick_one_local_pid(g_Game.myPlayerID2, nth_available_port(1), true);
+    }
+
+    /* Local death reporting. Server relies on CLIENT_DEATH to mark us
+     * not-alive so the match's alive_count <= 1 end condition can fire.
+     * Without this the server would never end a match where a human
+     * dies, so the round would hang until timer expiry every time. */
+    Entities::Player* me = find_player_by_pid(g_Game.myPlayerID);
+    if (me && me->GetHealth() <= 0 && !s_sent_death)
+    {
+        unet_send_player_death();
+        s_sent_death = true;
+    }
+    else if (me && me->GetHealth() > 0)
+    {
+        s_sent_death = false;  /* reset for next life / next match */
+    }
+
+    if (g_Game.hasSecondLocal && g_Game.myPlayerID2 != 0xFF)
+    {
+        Entities::Player* me2 = find_player_by_pid(g_Game.myPlayerID2);
+        if (me2 && me2->GetHealth() <= 0 && !s_sent_death_p2)
+        {
+            unet_send_player_death_p2();
+            s_sent_death_p2 = true;
+        }
+        else if (me2 && me2->GetHealth() > 0)
+        {
+            s_sent_death_p2 = false;
+        }
     }
 }
 
