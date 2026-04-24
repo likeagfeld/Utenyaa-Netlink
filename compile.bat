@@ -58,9 +58,9 @@ COPY /Y track02.wav "Game Files\track02.wav" >NUL
 COPY /Y track03.wav "Game Files\track03.wav" >NUL
 COPY /Y track04.wav "Game Files\track04.wav" >NUL
 
-REM No Online/ folder in the zip — dial 199405 is already shipped in the
-REM default netlink_config.ini that ships with current DreamPi and the
-REM netlink.py PC tunnel script. Players only need to update to the latest.
+REM No Online/ folder in the zip — the Utenyaa entry is already shipped
+REM in the default netlink_config.ini that comes with current DreamPi and
+REM the PC tunnel script. Players only need to update to the latest.
 
 ECHO === Game Files folder ready! ===
 GOTO :EOF

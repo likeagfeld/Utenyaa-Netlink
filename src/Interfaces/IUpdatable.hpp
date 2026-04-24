@@ -1,6 +1,6 @@
 #pragma once
 
-#include "..\Utils\TrackableObject.hpp"  // Include necessary header for TrackableObject
+#include "../Utils/TrackableObject.hpp"  // Include necessary header for TrackableObject
 
 /**
  * @brief Interface for updatable objects.

@@ -2,7 +2,11 @@
 
 #include <jo/Jo.hpp>
 
-#include "..\Utils\ponesound\ponesound.hpp"
+#include "../Interfaces/IRenderable.hpp"
+#include "../Interfaces/IUpdatable.hpp"
+#include "../Messages/Damage.hpp"
+#include "../Messages/Pickup.hpp"
+#include "../Utils/ponesound/ponesound.hpp"
 #include "Player.hpp"
 
 namespace Entities

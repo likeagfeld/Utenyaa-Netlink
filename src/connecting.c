@@ -46,7 +46,9 @@ void connecting_init(void)
     g_connect_msg = "PREPARING...";
     g_connect_timer = 0;
 
-    jo_audio_stop_cd();
+    /* jo_audio_stop_cd is part of Jo's audio module which isn't enabled
+     * in this build (Utenyaa uses PoneSound for CD). No explicit stop
+     * needed — the next PoneSound::CD::Play call overrides. */
     jo_clear_screen();
 
     unet_init();

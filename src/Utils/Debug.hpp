@@ -1,5 +1,5 @@
 #pragma once
-#include "jo\Jo.hpp"
+#include "jo/Jo.hpp"
 #include <stdint-gcc.h>
 
 class Debug

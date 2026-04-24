@@ -1,8 +1,8 @@
 #pragma once
 
-#include <jo\jo.hpp>
-#include "..\Objects\Model.hpp"
-#include "std\vector.h"
+#include <jo/jo.hpp>
+#include "../Objects/Model.hpp"
+#include "std/vector.h"
 
 /** @brief Loaded model objects manager
  */

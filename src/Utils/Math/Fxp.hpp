@@ -2,7 +2,7 @@
 
 #include <stdbool.h>
 #include <stdint-gcc.h>
-#include "..\std\utils.h"
+#include "../std/utils.h"
 
 /**
  * @brief A class for fixed-point arithmetic operations.

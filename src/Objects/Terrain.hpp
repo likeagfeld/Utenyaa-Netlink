@@ -1,9 +1,9 @@
 #pragma once
 
-#include "..\utils\Math\Vec3.hpp"
+#include "../Utils/Math/Vec3.hpp"
 #include "Map.hpp"
-#include "..\Utils\Geometry\AABB.hpp"
-#include "..\Utils\Debug.hpp"
+#include "../Utils/Geometry/AABB.hpp"
+#include "../Utils/Debug.hpp"
 
 namespace Objects
 {

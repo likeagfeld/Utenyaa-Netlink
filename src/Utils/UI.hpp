@@ -1,7 +1,7 @@
 #pragma once
 
-#include "std\vector.h"
-#include "std\string.h"
+#include "std/vector.h"
+#include "std/string.h"
 
 #include "Debug.hpp"
 #include "Message.hpp"

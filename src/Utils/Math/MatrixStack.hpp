@@ -3,7 +3,7 @@
 #include "Mat43.hpp"
 
 
-#include "..\std\vector.h"
+#include "../std/vector.h"
 
 class MatrixStack
 {

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <jo\Jo.hpp>
-#include "..\utils\LoaderUtil.hpp"
+#include <jo/Jo.hpp>
+#include "../Utils/LoaderUtil.hpp"
 
 #include "Mesh3D.hpp"
 

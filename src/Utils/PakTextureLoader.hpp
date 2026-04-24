@@ -2,7 +2,7 @@
 
 #include <jo/Jo.hpp>
 #include <stdint-gcc.h>
-#include "..\utils\LoaderUtil.hpp"
+#include "../Utils/LoaderUtil.hpp"
 
 class PakTextureLoader
 {

@@ -53,9 +53,16 @@ static const char* const STAGE_NAMES[UNET_STAGE_COUNT] = {
 
 static int getP2Port(void)
 {
-    /* Port 1 (multitap slot 2) or port 6 (Port B direct) */
-    if (jo_inputs[1].mask && jo_inputs[1].type) return 1;
-    if (jo_inputs[6].mask && jo_inputs[6].type) return 6;
+    /* Utenyaa's jo_engine PerDigital struct doesn't expose mask/type
+     * the way Flicky's newer one does. Use the portable availability
+     * check: any controller beyond the primary (index 0) is "P2". */
+    int count = 0, i;
+    for (i = 0; i < JO_INPUT_MAX_DEVICE; i++) {
+        if (jo_is_input_available(i)) {
+            if (count == 1) return i;
+            count++;
+        }
+    }
     return -1;
 }
 
@@ -374,10 +381,11 @@ void lobby_draw(void)
         if (!lp->active) continue;
         marker = (lp->id == g_Game.myPlayerID) ? '>' : ' ';
 
-        if (lp->character_id == 0xFF)
-            jo_strcpy(char_str, "--");
-        else
-            jo_sprintf(char_str, "%02d", (int)lp->character_id);
+        if (lp->character_id == 0xFF) {
+            char_str[0] = '-'; char_str[1] = '-'; char_str[2] = '\0';
+        } else {
+            sprintf(char_str, "%02d", (int)lp->character_id);
+        }
 
         vote_str = (lp->stage_vote == 0xFF) ? "-----" : STAGE_NAMES[lp->stage_vote];
 

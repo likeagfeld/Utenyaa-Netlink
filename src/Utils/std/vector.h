@@ -1,6 +1,6 @@
 #pragma once
 
-#include <jo\Jo.hpp>
+#include <jo/Jo.hpp>
 
 extern "C" {
 #include <stddef.h>

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <jo\Jo.hpp>
-#include "..\Utils\Math\Vec3.hpp"
+#include <jo/Jo.hpp>
+#include "../Utils/Math/Vec3.hpp"
 
 namespace Objects
 {

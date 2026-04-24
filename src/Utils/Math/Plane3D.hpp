@@ -1,6 +1,6 @@
 #pragma once
 
-#include "..\Math\Vec3.hpp"
+#include "../Math/Vec3.hpp"
 
 /**
  * @brief Represents a 3D plane.

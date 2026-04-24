@@ -2,10 +2,10 @@
 
 #include <jo/Jo.hpp>
 
-#include "..\Interfaces\IRenderable.hpp"
-#include "..\Utils\ModelManager.hpp"
-#include "..\Utils\Math\Trigonometry.hpp"
-#include "..\Objects\Terrain.hpp"
+#include "../Interfaces/IRenderable.hpp"
+#include "../Utils/ModelManager.hpp"
+#include "../Utils/Math/Trigonometry.hpp"
+#include "../Objects/Terrain.hpp"
 
 namespace Entities
 {

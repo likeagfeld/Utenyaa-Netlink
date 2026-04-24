@@ -3,6 +3,13 @@
  */
 
 #include "utenyaa_online_bridge.hpp"
+// Sound driver needed by entity headers (Player/Mine/Bomb Play calls)
+#include "Utils/ponesound/ponesound.hpp"
+// Include World.hpp FIRST — it pulls the entity types in the correct order
+// (Player before Crate) to avoid the upstream circular-include landmine
+// where Player.hpp → UI.hpp → Settings.hpp → World.hpp → Crate.hpp gets
+// Crate parsed before Player is defined.
+#include "Entities/World.hpp"
 #include "Entities/Player.hpp"
 #include "Entities/Bullet.hpp"
 #include "Entities/Mine.hpp"
@@ -12,6 +19,7 @@
 #include "Utils/Math/Vec3.hpp"
 #include "Utils/TrackableObject.hpp"
 #include "Utils/Message.hpp"
+#include "Utils/Settings.hpp"
 #include "Messages/Damage.hpp"
 #include "Messages/Pickup.hpp"
 #include "font.h"
@@ -289,11 +297,17 @@ static int nth_available_port(int index)
     return -1;
 }
 
-/* Port B / multitap slot 2 detection — matches Flicky's getP2Port(). */
+/* P2 port detect using portable jo_is_input_available — Utenyaa's
+ * jo_engine version doesn't expose the mask/type fields Flicky uses. */
 static int p2_port_detect(void)
 {
-    if (jo_inputs[1].mask && jo_inputs[1].type) return 1;
-    if (jo_inputs[6].mask && jo_inputs[6].type) return 6;
+    int count = 0;
+    for (int i = 0; i < JO_INPUT_MAX_DEVICE; i++) {
+        if (jo_is_input_available(i)) {
+            if (count == 1) return i;
+            count++;
+        }
+    }
     return -1;
 }
 

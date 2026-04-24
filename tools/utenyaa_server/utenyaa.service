@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=gary
 WorkingDirectory=/home/gary
-ExecStart=/usr/bin/python3 /home/gary/userver.py --port 4825 --admin-port 9093 --bots 0
+ExecStart=/usr/bin/python3 /home/gary/userver.py --bots 0
 Restart=on-failure
 RestartSec=3
 

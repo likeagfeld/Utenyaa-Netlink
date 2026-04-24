@@ -1,8 +1,8 @@
 #pragma once
 
-#include <jo\Jo.hpp>
-#include "..\Math\Fxp.hpp"
-#include "..\std\type_traits.h"
+#include <jo/Jo.hpp>
+#include "../Math/Fxp.hpp"
+#include "../std/type_traits.h"
 
 class Trigonometry
 {

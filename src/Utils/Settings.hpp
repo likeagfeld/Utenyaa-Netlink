@@ -2,7 +2,7 @@
 
 #include <stddef.h>
 
-#include "..\Entities\World.hpp"
+#include "../Entities/World.hpp"
 
 struct Settings
 {

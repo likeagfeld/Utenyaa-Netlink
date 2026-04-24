@@ -1,10 +1,10 @@
 #pragma once
 
-#include <jo\Jo.hpp>
+#include <jo/Jo.hpp>
 #include "Mesh3D.hpp"
-#include "..\utils\LoaderUtil.hpp"
-#include "..\utils\std\vector.h"
-#include "..\Interfaces\IColliding.hpp"
+#include "../Utils/LoaderUtil.hpp"
+#include "../Utils/std/vector.h"
+#include "../Interfaces/IColliding.hpp"
 
 /** @brief Game objects
  */

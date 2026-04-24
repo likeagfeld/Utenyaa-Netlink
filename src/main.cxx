@@ -1,18 +1,18 @@
 
-#include <jo\Jo.hpp>
-#include "utils\ponesound\ponesound.hpp"
+#include <jo/Jo.hpp>
+#include "Utils/ponesound/ponesound.hpp"
 
-#include "Utils\Math\Vec3.hpp"
-#include "Utils\TrackableObject.hpp"
+#include "Utils/Math/Vec3.hpp"
+#include "Utils/TrackableObject.hpp"
 
-#include "Utils\Message.hpp"
-#include "Entities\World.hpp"
-#include "Utils\Menu.hpp"
-#include "Utils\Helpers.hpp"
+#include "Utils/Message.hpp"
+#include "Entities/World.hpp"
+#include "Utils/Menu.hpp"
+#include "Utils/Helpers.hpp"
 
-#include "Utils\Debug.hpp"
+#include "Utils/Debug.hpp"
 
-#include "net\utenyaa_main_glue.h"
+#include "net/utenyaa_main_glue.h"
 #include "utenyaa_online_bridge.hpp"
 
 jo_camera camera;

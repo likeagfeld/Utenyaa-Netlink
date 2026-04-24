@@ -2,26 +2,30 @@
 
 #include <jo/Jo.hpp>
 
-#include "..\utils\Geometry\AABB.hpp"
-#include "..\utils\Math\Trigonometry.hpp"
-#include "..\utils\Math\Plane3D.hpp"
+#include "../Interfaces/IRenderable.hpp"
+#include "../Interfaces/IUpdatable.hpp"
+#include "../Interfaces/IColliding.hpp"
 
-#include "..\Objects\Model.hpp"
-#include "..\utils\ModelManager.hpp"
-#include "..\utils\UI.hpp"
+#include "../Utils/Geometry/AABB.hpp"
+#include "../Utils/Math/Trigonometry.hpp"
+#include "../Utils/Math/Plane3D.hpp"
+
+#include "../Objects/Model.hpp"
+#include "../Utils/ModelManager.hpp"
+#include "../Utils/UI.hpp"
 
 #include "Bullet.hpp"
 #include "Mine.hpp"
 #include "Bomb.hpp"
 
-#include "..\Messages\Damage.hpp"
-#include "..\Messages\Pickup.hpp"
-#include "..\Messages\QueryController.hpp"
+#include "../Messages/Damage.hpp"
+#include "../Messages/Pickup.hpp"
+#include "../Messages/QueryController.hpp"
 
-#include "..\Utils\Helpers.hpp"
+#include "../Utils/Helpers.hpp"
 
-#include "..\net\utenyaa_net.h"
-#include "..\net\utenyaa_game.h"
+#include "../net/utenyaa_net.h"
+#include "../net/utenyaa_game.h"
 
 namespace Entities
 {
@@ -359,7 +363,7 @@ namespace Entities
 			Vec3 diff = serverPos - this->position;
 			this->position = this->position + (diff * Fxp(0.5));
 			// Extrapolate +3 frames along server velocity.
-			this->position = this->position + (serverVel * Fxp(3));
+			this->position = this->position + (serverVel * Fxp::FromInt(3));
 			this->angle = serverAngle;
 			this->health = serverHp;
 		}

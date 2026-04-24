@@ -2,15 +2,15 @@
 
 #include <jo/Jo.hpp>
 
-#include "..\Objects\Map.hpp"
+#include "../Objects/Map.hpp"
 
-#include "..\Utils\Geometry\AABB.hpp"
-#include "..\Interfaces\IRenderable.hpp"
-#include "..\Interfaces\IUpdatable.hpp"
+#include "../Utils/Geometry/AABB.hpp"
+#include "../Interfaces/IRenderable.hpp"
+#include "../Interfaces/IUpdatable.hpp"
 
-#include "..\Messages\Damage.hpp"
-#include "..\Messages\QueryController.hpp"
-#include "..\Utils\Helpers.hpp"
+#include "../Messages/Damage.hpp"
+#include "../Messages/QueryController.hpp"
+#include "../Utils/Helpers.hpp"
 
 namespace Entities
 {

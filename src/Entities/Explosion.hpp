@@ -2,10 +2,10 @@
 
 #include <jo/Jo.hpp>
 
-#include "..\Utils\Math\Vec3.hpp"
-#include "..\Interfaces\IRenderable.hpp"
-#include "..\Interfaces\IUpdatable.hpp"
-#include "..\Utils\Helpers.hpp"
+#include "../Utils/Math/Vec3.hpp"
+#include "../Interfaces/IRenderable.hpp"
+#include "../Interfaces/IUpdatable.hpp"
+#include "../Utils/Helpers.hpp"
 
 namespace Entities
 {

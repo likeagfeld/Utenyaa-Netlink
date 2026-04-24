@@ -4,15 +4,15 @@
 #include <jo/Jo.hpp>
 
 // Object definitions
-#include "..\Objects\Map.hpp"
-#include "..\Objects\Model.hpp"
+#include "../Objects/Map.hpp"
+#include "../Objects/Model.hpp"
 
 // Managers
-#include "..\utils\ModelManager.hpp"
+#include "../Utils/ModelManager.hpp"
 
 // Interfaces
-#include "..\Interfaces\IRenderable.hpp"
-#include "..\Objects\Terrain.hpp"
+#include "../Interfaces/IRenderable.hpp"
+#include "../Objects/Terrain.hpp"
 
 // Spawnable entities
 #include "StaticModel.hpp"
@@ -20,8 +20,8 @@
 #include "Crate.hpp"
 #include "Explosion.hpp"
 
-#include "..\Utils\Debug.hpp"
-#include "..\Utils\PakTextureLoader.hpp"
+#include "../Utils/Debug.hpp"
+#include "../Utils/PakTextureLoader.hpp"
 
 
 namespace Entities

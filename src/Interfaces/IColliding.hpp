@@ -1,8 +1,8 @@
 #pragma once
 
-#include "..\utils\Math\Vec3.hpp"
-#include "..\utils\Geometry\AABB.hpp"
-#include "..\Utils\TrackableObject.hpp"  // Include necessary header for TrackableObject
+#include "../Utils/Math/Vec3.hpp"
+#include "../Utils/Geometry/AABB.hpp"
+#include "../Utils/TrackableObject.hpp"  // Include necessary header for TrackableObject
 
 /**
  * @brief Interface for colliding objects.

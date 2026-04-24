@@ -24,9 +24,7 @@ First alpha release of online multiplayer support for Utenyaa via the Sega Satur
 
 ## Online setup
 
-No manual config editing needed. Update to the **latest DreamPi** or **latest netlink.py PC tunnel script** — dial `199405` for Utenyaa is already shipped in the default `netlink_config.ini` alongside the other NetLink revival games. Just dial `199405` from the Saturn and the bridge takes care of the rest.
-
-Server is already live at `saturncoup.duckdns.org:4825` — same VM that hosts Coup, Disasteroids, and Flicky's Flock. Admin tab visible on the unified saturncoup admin portal.
+No manual config editing needed. Update to the **latest DreamPi** or **latest netlink.py PC tunnel script** — the Utenyaa entry is already shipped in the default `netlink_config.ini` alongside the other NetLink revival games. The server is already live and running; just dial in from the Saturn and the bridge takes care of the rest.
 
 ## How to play
 

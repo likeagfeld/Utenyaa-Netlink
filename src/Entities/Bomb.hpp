@@ -2,20 +2,20 @@
 
 #include <jo/Jo.hpp>
 
-#include "..\Objects\Map.hpp"
+#include "../Objects/Map.hpp"
 
-#include "..\Utils\Geometry\AABB.hpp"
-#include "..\Interfaces\IRenderable.hpp"
-#include "..\Interfaces\IUpdatable.hpp"
-#include "..\Objects\Terrain.hpp"
+#include "../Utils/Geometry/AABB.hpp"
+#include "../Interfaces/IRenderable.hpp"
+#include "../Interfaces/IUpdatable.hpp"
+#include "../Objects/Terrain.hpp"
 
-#include "..\Messages\Damage.hpp"
-#include "..\Messages\QueryController.hpp"
+#include "../Messages/Damage.hpp"
+#include "../Messages/QueryController.hpp"
 
-#include "..\Utils\Math\Trigonometry.hpp"
+#include "../Utils/Math/Trigonometry.hpp"
 
 // Managers
-#include "..\utils\ModelManager.hpp"
+#include "../Utils/ModelManager.hpp"
 
 namespace Entities
 {

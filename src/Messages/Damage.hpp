@@ -1,7 +1,7 @@
 #pragma once
 
 #include <stdint-gcc.h>
-#include "..\Utils\Message.hpp"
+#include "../Utils/Message.hpp"
 
 namespace Messages
 {

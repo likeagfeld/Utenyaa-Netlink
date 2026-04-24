@@ -59,15 +59,15 @@ CCFLAGS = -DJO_FRAMERATE=1\
 		-DJO_COMPILE_WITH_STORYBOARD_SUPPORT\
 		-DJO_COMPILE_WITH_DUAL_CPU_SUPPORT\
 
-LDFLAGS = -T$(LDFILE) -Wl,-Map,$(BUILD_MAP),-e,___Start -nostartfiles
+LDFLAGS = -T$(LDFILE) -Wl,-Map,$(BUILD_MAP),-e,___Start,--allow-multiple-definition -nostartfiles $(EXTRA_LDFLAGS)
 
 ASSETS_DIR=./cd
 
-%.o : %.c 
-	sh2eb-elf-gcc.exe $< $(CCFLAGS) -std=c2x -o $@
+%.o : %.c
+	sh2eb-elf-gcc.exe $< $(CCFLAGS) -std=gnu2x -o $@
 
-%.o : %.cxx 
-	sh2eb-elf-g++.exe $< $(CCFLAGS) -std=c++23 -fpermissive -fno-exceptions -fno-rtti -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-threadsafe-statics -fno-use-cxa-atexit -o $@
+%.o : %.cxx
+	sh2eb-elf-g++.exe $< $(CCFLAGS) -std=gnu++23 -fpermissive -fno-exceptions -fno-rtti -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-threadsafe-statics -fno-use-cxa-atexit -o $@
 
 compile_objects : $(OBJECTS)
 	sh2eb-elf-gcc.exe $(LDFLAGS) $(SYSOBJECTS) $(OBJECTS) $(LIBS) -o $(BUILD_ELF)
