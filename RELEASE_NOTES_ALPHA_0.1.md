@@ -24,25 +24,13 @@ First alpha release of online multiplayer support for Utenyaa via the Sega Satur
 
 ## Online setup
 
-No bridge script needed on your end. Add this block to your DreamPi or PC `netlink_config.ini` and dial `199405`:
+No manual config editing needed. Update to the **latest DreamPi** or **latest netlink.py PC tunnel script** — dial `199405` for Utenyaa is already shipped in the default `netlink_config.ini` alongside the other NetLink revival games. Just dial `199405` from the Saturn and the bridge takes care of the rest.
 
-```ini
-[server:199405]
-name = Utenyaa
-host = saturncoup.duckdns.org
-port = 4825
-shared_secret = Utenyaa2026!NetLink#Key
-auth_magic = AUTH
-auth_timeout = 5.0
-```
-
-Server is already live at `saturncoup.duckdns.org:4825` — same VM that hosts Coup, Disasteroids, and Flicky's Flock. Admin portal tab at `/admin/utenyaa/`.
+Server is already live at `saturncoup.duckdns.org:4825` — same VM that hosts Coup, Disasteroids, and Flicky's Flock. Admin tab visible on the unified saturncoup admin portal.
 
 ## How to play
 
-Load the `.cue` (not the `.iso`) on your emulator or burn to disc. This alpha zip contains source + online config; if you want a pre-built ISO, build locally with `make build` (Yaul + jo-engine toolchain required — same as upstream).
-
-Supply your own audio tracks — `track02.wav` / `track03.wav` / `track04.wav` are included from upstream.
+Load `START GAME.CUE` (not `game.iso`) on your emulator or ODE. The cue references both the game ISO track and the three CD audio tracks (title / pause / gameplay).
 
 ## Controls
 
