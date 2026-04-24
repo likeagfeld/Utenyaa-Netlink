@@ -318,6 +318,14 @@ namespace Entities
 			return this->controller;
 		}
 
+		/** @brief Get player world position (for network PLAYER_STATE sync)
+		 */
+		const Vec3& GetPosition() const { return this->position; }
+
+		/** @brief Get player facing angle (radians)
+		 */
+		const Fxp& GetAngle() const { return this->angle; }
+
 		/** @brief Get object bounds
 		 * @param result Axis aligned bounding box
 		 */

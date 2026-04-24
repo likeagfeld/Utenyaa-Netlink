@@ -77,7 +77,7 @@ static Entities::Player* find_player_by_pid(uint8_t pid)
 {
     for (auto* p : TrackableObject<Entities::Player>::objects)
     {
-        if (p && p->controller == pid) return p;
+        if (p && (uint8_t)p->GetController() == pid) return p;
     }
     return nullptr;
 }
@@ -94,8 +94,9 @@ static void cb_bullet_spawn(uint16_t /*eid*/, uint8_t origin_pid,
     /* Skip local-player echo — they already spawned it at fire time. */
     if (origin_pid == g_Game.myPlayerID) return;
     if (origin_pid == g_Game.myPlayerID2 && g_Game.hasSecondLocal) return;
-    Vec3 dir = fxp_vec(dx, dy, dz);
     Vec3 pos = fxp_vec(x, y, z);
+    Vec3 dir = fxp_vec(dx, dy, dz);
+    /* Bullet/Mine/Bomb ctors take non-const Vec3& — pass named lvalues */
     new Entities::Bullet((uint8_t)origin_pid, dir, pos);
 }
 
@@ -114,8 +115,8 @@ static void cb_bomb_spawn(uint16_t /*eid*/, uint8_t origin_pid,
 {
     if (origin_pid == g_Game.myPlayerID) return;
     if (origin_pid == g_Game.myPlayerID2 && g_Game.hasSecondLocal) return;
-    Vec3 dir = fxp_vec(dx, dy, dz);
     Vec3 pos = fxp_vec(x, y, z);
+    Vec3 dir = fxp_vec(dx, dy, dz);
     new Entities::Bomb(dir, pos);
 }
 
@@ -123,7 +124,8 @@ static void cb_explosion(int32_t x, int32_t y, int32_t z, uint16_t /*radius*/,
                          const uint8_t* victims, int victim_count)
 {
     Vec3 pos = fxp_vec(x, y, z);
-    new Entities::Explosion(pos, 1.0);
+    Fxp scale = Fxp::FromInt(1);
+    new Entities::Explosion(pos, scale);
 
     /* Apply server-resolved damage to named victims. */
     for (int i = 0; i < victim_count; i++)
@@ -232,11 +234,12 @@ static void tick_one_local_pid(uint8_t pid, int pad_port, bool is_p2)
     Entities::Player* p = find_player_by_pid(pid);
     if (!p) return;
 
-    int32_t x  = p->position.x.Value();
-    int32_t y  = p->position.y.Value();
-    int32_t z  = p->position.z.Value();
-    int32_t dx = 0, dy = 0, dz = 0;  /* Utenyaa Player has no vel field */
-    int16_t angle = (int16_t)(p->angle.Value() >> 8);
+    const Vec3& pos = p->GetPosition();
+    int32_t x  = pos.x.Value();
+    int32_t y  = pos.y.Value();
+    int32_t z  = pos.z.Value();
+    int32_t dx = 0, dy = 0, dz = 0;  /* Utenyaa Player has no velocity field */
+    int16_t angle = (int16_t)(p->GetAngle().Value() >> 8);
     uint8_t hp = (uint8_t)(p->GetHealth() < 0 ? 0 : p->GetHealth());
 
     if (is_p2) unet_send_player_state_p2(x, y, z, dx, dy, dz, angle, hp);
