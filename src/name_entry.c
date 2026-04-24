@@ -256,6 +256,10 @@ void nameEntry_draw(void)
 
     if (g_Game.gameState != UGAME_STATE_NAME_ENTRY) return;
 
+    /* Clear NBG0 each frame so the letter grid / cursor / preview
+     * redraw cleanly without leaving stale cells behind. */
+    jo_clear_screen();
+
     /* Title */
     font_draw_centered("ENTER NAME", FONT_Y(3), 500);
 

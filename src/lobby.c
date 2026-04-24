@@ -355,6 +355,11 @@ void lobby_draw(void)
     if (g_Game.gameState != UGAME_STATE_LOBBY) return;
     nd = unet_get_data();
 
+    /* Clear NBG0 each frame — roster / ready states / vote tallies
+     * change every frame and jo_printf doesn't auto-erase overwritten
+     * cells, so stale rows would accumulate without this. */
+    jo_clear_screen();
+
     font_draw_centered("UTENYAA LOBBY", FONT_Y(2), 500);
     font_printf(FONT_X(1), FONT_Y(4), 500,
                 "PLAYERS: %d/%d", nd->lobby_count, UNET_MAX_PLAYERS);

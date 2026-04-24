@@ -207,6 +207,10 @@ void connecting_draw(void)
 
     if (g_Game.gameState != UGAME_STATE_CONNECTING) return;
 
+    /* jo_printf output persists on NBG0 frame-to-frame; clear first
+     * so lines that changed don't leave stale tails behind. */
+    jo_clear_screen();
+
     font_draw_centered("CONNECTING", FONT_Y(8), 500);
     /* Pad status to 25 chars so shorter messages ("CONNECTED!") don't
      * leave trailing characters from longer ones ("INITIALIZING MODEM..."). */
