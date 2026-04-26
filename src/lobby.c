@@ -43,6 +43,15 @@ static bool g_ltrig_pressed = false;
 static bool g_rtrig_pressed = false;
 static bool g_x_pressed = false;
 
+/* Disconnect confirmation prompt — set when user presses B or Y so
+ * an accidental press doesn't kick them out of the lobby. */
+typedef enum {
+    LOBBY_CONFIRM_NONE = 0,
+    LOBBY_CONFIRM_BACK_TO_TITLE,    /* B pressed */
+    LOBBY_CONFIRM_DISCONNECT        /* Y pressed */
+} lobby_confirm_t;
+static lobby_confirm_t g_confirm = LOBBY_CONFIRM_NONE;
+
 /*============================================================================
  * Stage names (indexed by UNET_STAGE_*)
  *============================================================================*/
@@ -111,6 +120,7 @@ void lobby_init(void)
     g_ltrig_pressed = false;
     g_rtrig_pressed = false;
     g_x_pressed = false;
+    g_confirm = LOBBY_CONFIRM_NONE;
 
     unet_clear_log();
     jo_clear_screen();
@@ -124,6 +134,40 @@ void lobby_init(void)
 void lobby_input(void)
 {
     if (g_Game.gameState != UGAME_STATE_LOBBY) return;
+
+    /* If a disconnect confirmation is pending, only A/C/B/Y/START are
+     * meaningful — gate everything else so the user can't accidentally
+     * change ready state, character, vote, etc. while the prompt is up. */
+    if (g_confirm != LOBBY_CONFIRM_NONE) {
+        const bool a = jo_is_pad1_key_pressed(JO_KEY_A) || jo_is_pad1_key_pressed(JO_KEY_C);
+        const bool cancel = jo_is_pad1_key_pressed(JO_KEY_B) ||
+                            jo_is_pad1_key_pressed(JO_KEY_Y) ||
+                            jo_is_pad1_key_pressed(JO_KEY_START);
+
+        if (a && !g_Game.input.pressedABC) {
+            /* Confirmed — execute the action. */
+            unet_send_disconnect();
+            modem_hangup(&g_uart);
+            jo_clear_screen();
+            g_Game.input.pressedABC = true;
+            g_Game.input.pressedLT = true;
+            g_Game.input.pressedRT = true;
+            g_Game.titleScreenChoice = 2;
+            g_Game.isOnlineMode = false;
+            g_Game.gameState = UGAME_STATE_TITLE_SCREEN;
+            g_confirm = LOBBY_CONFIRM_NONE;
+            return;
+        }
+        if (cancel) {
+            /* Any of B/Y/START while prompt is up = cancel. */
+            g_confirm = LOBBY_CONFIRM_NONE;
+            g_Game.input.pressedLT = true;
+            g_Game.input.pressedRT = true;
+            g_Game.input.pressedStart = true;
+        }
+        if (a) g_Game.input.pressedABC = true; else g_Game.input.pressedABC = false;
+        return;
+    }
 
     /* A/C = ready toggle */
     if (jo_is_pad1_key_pressed(JO_KEY_A) || jo_is_pad1_key_pressed(JO_KEY_C)) {
@@ -153,36 +197,21 @@ void lobby_input(void)
         g_Game.input.pressedStart = false;
     }
 
-    /* B = back to title AND disconnect modem so user can re-dial.
-     * Earlier this path tried to "stay connected for quick rejoin" but
-     * that left the modem carrier up and the re-dial logic refused to
-     * reuse it. Simpler + less broken to always hang up. */
+    /* B = arm "back to title" confirmation. Prompt is shown by lobby_draw;
+     * second A/C confirms, B/Y/START cancels. */
     if (jo_is_pad1_key_pressed(JO_KEY_B)) {
         if (!g_Game.input.pressedLT) {
-            unet_send_disconnect();
-            modem_hangup(&g_uart);
-            jo_clear_screen();
-            g_Game.input.pressedABC = true;
-            g_Game.titleScreenChoice = 2;
-            g_Game.isOnlineMode = false;
-            g_Game.gameState = UGAME_STATE_TITLE_SCREEN;
+            g_confirm = LOBBY_CONFIRM_BACK_TO_TITLE;
         }
         g_Game.input.pressedLT = true;
     } else {
         g_Game.input.pressedLT = false;
     }
 
-    /* Y = disconnect entirely (same as B now — dedicated hangup kept
-     * for muscle memory / symmetry with Flicky & Disasteroids). */
+    /* Y = arm "disconnect" confirmation. */
     if (jo_is_pad1_key_pressed(JO_KEY_Y)) {
         if (!g_Game.input.pressedRT) {
-            unet_send_disconnect();
-            modem_hangup(&g_uart);
-            jo_clear_screen();
-            g_Game.input.pressedABC = true;
-            g_Game.titleScreenChoice = 2;
-            g_Game.isOnlineMode = false;
-            g_Game.gameState = UGAME_STATE_TITLE_SCREEN;
+            g_confirm = LOBBY_CONFIRM_DISCONNECT;
         }
         g_Game.input.pressedRT = true;
     } else {
@@ -448,6 +477,19 @@ void lobby_draw(void)
               FONT_X(1), FONT_Y(25), 500);
     font_draw("UP/DN:BOTS  B:BACK  Y:QUIT  Z:STATS",
               FONT_X(1), FONT_Y(26), 500);
+
+    /* Disconnect-confirmation overlay — shown on top when armed. */
+    if (g_confirm == LOBBY_CONFIRM_BACK_TO_TITLE) {
+        font_draw_centered("                                  ", FONT_Y(13), 600);
+        font_draw_centered("  RETURN TO TITLE SCREEN?         ", FONT_Y(14), 600);
+        font_draw_centered("  THIS WILL DISCONNECT YOU.       ", FONT_Y(15), 600);
+        font_draw_centered("  A = YES   B/Y/START = CANCEL    ", FONT_Y(17), 600);
+    } else if (g_confirm == LOBBY_CONFIRM_DISCONNECT) {
+        font_draw_centered("                                  ", FONT_Y(13), 600);
+        font_draw_centered("  DISCONNECT FROM SERVER?         ", FONT_Y(14), 600);
+        font_draw_centered("  YOU WILL HAVE TO RE-DIAL.       ", FONT_Y(15), 600);
+        font_draw_centered("  A = YES   B/Y/START = CANCEL    ", FONT_Y(17), 600);
+    }
 
 skip_player_list:
     ;
