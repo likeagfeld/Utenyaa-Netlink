@@ -212,6 +212,21 @@ typedef struct {
     /* Persistent leaderboard (from server) */
     unet_leaderboard_entry_t leaderboard[UNET_LEADERBOARD_MAX];
     int leaderboard_count;
+
+    /* === Diagnostic counters (instrumentation, not protocol state) ===
+     * Populated by unet_tick / unet_rx_poll. Read by online screens to
+     * render a debug strip so we can see hard byte/frame numbers
+     * without bus-pirating the modem. */
+    uint32_t diag_rx_bytes;          /* total UART bytes consumed */
+    uint32_t diag_tx_bytes;          /* total bytes sent */
+    uint32_t diag_frames_decoded;    /* complete SNCP frames received */
+    uint32_t diag_parse_errors;      /* bad-length / oversize frame events */
+    uint32_t diag_dispatch_count;    /* dispatch() calls (= frames handled) */
+    uint8_t  diag_last_op;           /* opcode of most recent decoded frame */
+    uint8_t  diag_last_op_prev;      /* prior opcode (helps spot repeats) */
+    uint16_t diag_last_op_len;       /* payload length of most recent */
+    uint32_t diag_heartbeats_sent;
+    uint32_t diag_auth_attempts;
 } unet_state_data_t;
 
 /*============================================================================

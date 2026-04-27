@@ -686,6 +686,7 @@ class UtenyaaServer:
             "allow_bots_start":       True,   # whether bots alone can meet MIN_TO_START
             "timer_broadcast_hz":     1,      # MATCH_TIMER broadcasts per second
             "sudden_death_enabled":   True,
+            "verbose_rx_log":         True,   # log every RX frame opcode
         }
 
         # Lobby players (keyed by game_pid 0..3, mapped from client user_id)
@@ -1090,6 +1091,13 @@ class UtenyaaServer:
     def _handle_frame(self, c: ClientInfo, payload: bytes):
         if not payload: return
         op = payload[0]
+        # Per-frame diag log — gated by tune knob so it can be silenced
+        # in production but ON by default during alpha testing.
+        if self.tune.get("verbose_rx_log", True):
+            who = c.username if c.authenticated else f"<pre-auth@{c.address[0]}>"
+            log.info("RX op=0x%02X len=%d from=%s state=%s",
+                     op, len(payload), who,
+                     "auth" if c.authenticated else "pre")
 
         if op == MSG_CONNECT:
             # Payload: [op:1][optional uuid:36]
@@ -1120,6 +1128,8 @@ class UtenyaaServer:
                             del self.clients[k]
                     self.clients[uid] = c
                     c.send_raw(build_welcome(uid, existing_uuid, c.username, back=True))
+                    log.info("WELCOME_BACK → %s uid=%d name=%r",
+                             c.address[0], uid, c.username)
                     self._broadcast_lobby()
                     return
             # New user — require username
@@ -1156,6 +1166,8 @@ class UtenyaaServer:
             self.clients[c.user_id] = c
             self.uuid_map[c.uuid] = c.user_id
             c.send_raw(build_welcome(c.user_id, c.uuid, c.username, back=False))
+            log.info("WELCOME → %s uid=%d uuid=%s name=%r",
+                     c.address[0], c.user_id, c.uuid[:8], c.username)
             self._record_join(c.username, c.address)
             self._broadcast_lobby()
             return
@@ -1360,11 +1372,16 @@ class UtenyaaServer:
         if len(c.recv_buffer) < need:
             return False
         if c.recv_buffer[:len(AUTH_MAGIC)] != AUTH_MAGIC:
-            return True  # No auth header — assume legacy / direct client
+            log.info("Bridge auth: no AUTH magic from %s — assuming legacy direct client", c.address)
+            return True
         if c.recv_buffer[len(AUTH_MAGIC):need] != SHARED_SECRET:
-            log.warning("Bridge auth failed from %s", c.address)
+            log.warning("Bridge auth FAILED from %s — got=%r expected=%r",
+                        c.address,
+                        c.recv_buffer[len(AUTH_MAGIC):need][:32],
+                        SHARED_SECRET[:32])
             c.socket.close()
             return False
+        log.info("Bridge auth OK from %s — SNCP stream open", c.address)
         c.recv_buffer = c.recv_buffer[need:]
         return True
 

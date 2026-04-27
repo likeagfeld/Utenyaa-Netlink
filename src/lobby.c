@@ -478,6 +478,20 @@ void lobby_draw(void)
     font_draw("UP/DN:BOTS  B:BACK  Y:QUIT  Z:STATS",
               FONT_X(1), FONT_Y(26), 500);
 
+    /* Diagnostic strip — last row. Numbers are persistent counters
+     * since lazy_init_online ran. RX = total bytes read from UART,
+     * FR = SNCP frames decoded, ER = parse errors (length mismatch),
+     * OP = most recent opcode received, AU = auth retry count. */
+    font_printf(FONT_X(1), FONT_Y(27), 500,
+                "S:%d RX:%lu FR:%lu ER:%lu OP:%02X AU:%lu MY:%d",
+                (int)unet_get_state(),
+                (unsigned long)nd->diag_rx_bytes,
+                (unsigned long)nd->diag_frames_decoded,
+                (unsigned long)nd->diag_parse_errors,
+                (unsigned)nd->diag_last_op,
+                (unsigned long)nd->diag_auth_attempts,
+                (int)nd->my_player_id);
+
     /* Disconnect-confirmation overlay — shown on top when armed. */
     if (g_confirm == LOBBY_CONFIRM_BACK_TO_TITLE) {
         font_draw_centered("                                  ", FONT_Y(13), 600);

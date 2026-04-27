@@ -188,6 +188,12 @@ static inline void unet_rx_init(unet_rx_state_t* st, uint8_t* buf, int buf_size)
  *    0 = incomplete
  *   -1 = error (oversize or zero-length)
  */
+/* Forward decl — defined in utenyaa_net.h, but we want unet_rx_poll
+ * (an inline in this header) to bump the byte counter without pulling
+ * the whole net header in here. The pointer is published below by the
+ * net layer's init function. */
+extern uint32_t* g_unet_rx_bytes_counter;
+
 static inline int unet_rx_poll(unet_rx_state_t* st,
                                const net_transport_t* transport)
 {
@@ -195,6 +201,7 @@ static inline int unet_rx_poll(unet_rx_state_t* st,
     while (bytes_read < UNET_RX_MAX_PER_POLL && net_transport_rx_ready(transport)) {
         uint8_t b = net_transport_rx_byte(transport);
         bytes_read++;
+        if (g_unet_rx_bytes_counter) (*g_unet_rx_bytes_counter)++;
 
         if (st->frame_len < 0) {
             st->buf[st->rx_pos++] = b;

@@ -22,6 +22,10 @@
 static unet_state_data_t g_net;
 static unet_callbacks_t  g_cb;
 
+/* Published pointer for the inline rx_poll in the protocol header to
+ * bump per-byte without exposing the whole state struct to the header. */
+uint32_t* g_unet_rx_bytes_counter = NULL;
+
 /*============================================================================
  * Small helpers
  *============================================================================*/
@@ -51,7 +55,10 @@ static void clear_crates(void)
 
 static void tx(const uint8_t* buf, int len)
 {
-    if (g_net.transport) net_transport_send(g_net.transport, buf, len);
+    if (g_net.transport) {
+        net_transport_send(g_net.transport, buf, len);
+        g_net.diag_tx_bytes += (uint32_t)len;
+    }
 }
 
 /*============================================================================
@@ -65,6 +72,10 @@ void unet_init(void)
      * unet_init() called when the user enters the online flow. */
     memset(&g_net, 0, sizeof(g_net));
     g_net.state = UNET_STATE_OFFLINE;
+    /* Publish the diag_rx_bytes pointer so the inline rx_poll in
+     * utenyaa_protocol.h can increment it. Survives memset since the
+     * counter pointer is a separate global. */
+    g_unet_rx_bytes_counter = &g_net.diag_rx_bytes;
     g_net.my_player_id = 0xFF;
     g_net.my_player_id2 = 0xFF;
     g_net.my_character = 0xFF;
@@ -505,6 +516,10 @@ static void on_log(const uint8_t* p, int len)
 static void dispatch(const uint8_t* p, int len)
 {
     if (len < 1) return;
+    g_net.diag_dispatch_count++;
+    g_net.diag_last_op_prev = g_net.diag_last_op;
+    g_net.diag_last_op = p[0];
+    g_net.diag_last_op_len = (uint16_t)len;
     switch (p[0]) {
     case SNCP_MSG_WELCOME:           on_welcome(p, len); break;
     case SNCP_MSG_WELCOME_BACK:      on_welcome(p, len); break;
@@ -551,8 +566,15 @@ void unet_tick(void)
 
     for (pkts = 0; pkts < UNET_MAX_PACKETS_FRAME; pkts++) {
         len = unet_rx_poll(&g_net.rx, g_net.transport);
-        if (len <= 0) break;
-        dispatch(g_net.rx_buf, len);
+        if (len > 0) {
+            g_net.diag_frames_decoded++;
+            dispatch(g_net.rx_buf, len);
+        } else if (len < 0) {
+            g_net.diag_parse_errors++;
+            break;
+        } else {
+            break;
+        }
     }
 
     g_net.heartbeat_counter++;
@@ -561,6 +583,7 @@ void unet_tick(void)
         if (g_net.state == UNET_STATE_LOBBY || g_net.state == UNET_STATE_PLAYING) {
             n = unet_encode_heartbeat(g_net.tx_buf);
             tx(g_net.tx_buf, n);
+            g_net.diag_heartbeats_sent++;
         }
     }
 
@@ -569,6 +592,7 @@ void unet_tick(void)
         if (g_net.auth_timer >= UNET_AUTH_TIMEOUT) {
             g_net.auth_timer = 0;
             g_net.auth_retries++;
+            g_net.diag_auth_attempts++;
             if (g_net.auth_retries >= UNET_AUTH_MAX_RETRIES) {
                 g_net.state = UNET_STATE_DISCONNECTED;
                 g_net.status_msg = "Auth timed out";
