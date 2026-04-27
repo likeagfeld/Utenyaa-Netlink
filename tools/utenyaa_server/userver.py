@@ -55,9 +55,13 @@ MAX_RECV_BUFFER = 8192
 USERNAME_MAX_LEN = 16
 UUID_LEN = 36
 
-# Bridge authentication (matches netlink_config.ini entry for dial 199405)
+# Bridge authentication. DreamPi/netlink.py speaks the Disasteroids/Flicky
+# variant of the protocol: AUTH magic + 1-byte length + secret bytes. Server
+# replies with a single AUTH_OK byte on success. Don't change to raw bytes —
+# DreamPi won't dial us correctly.
 SHARED_SECRET = b"Utenyaa2026!NetLink#Key"
 AUTH_MAGIC = b"AUTH"
+AUTH_OK = 0x01
 AUTH_TIMEOUT = 5.0
 
 MAX_PLAYERS = 4
@@ -1365,25 +1369,57 @@ class UtenyaaServer:
     # ---------- bridge auth (handshake before SNCP framing begins) ----------
 
     def _try_bridge_auth(self, c: ClientInfo) -> bool:
-        """Consumes the AUTH magic + shared-secret handshake. Returns True
-        once authenticated and the SNCP stream can begin. Same shape as
-        Disasteroids/Flicky so existing DreamPi/netlink_bridge works."""
-        need = len(AUTH_MAGIC) + len(SHARED_SECRET)
-        if len(c.recv_buffer) < need:
+        """Consumes the AUTH magic + length-prefixed shared-secret handshake
+        used by DreamPi and netlink.py. Wire format:
+
+            AUTH<u8 secret_len><secret bytes>
+
+        Server replies with a single AUTH_OK byte once accepted, then SNCP
+        framing begins. Returns True when the handshake is complete and
+        bytes after it can be parsed as SNCP. Returns False if more bytes
+        are needed OR the auth was bad and the socket is now closed (the
+        caller checks for that via the closed flag we set on c)."""
+        magic_len = len(AUTH_MAGIC)
+        buf = c.recv_buffer
+        if len(buf) < magic_len:
             return False
-        if c.recv_buffer[:len(AUTH_MAGIC)] != AUTH_MAGIC:
-            log.info("Bridge auth: no AUTH magic from %s — assuming legacy direct client", c.address)
+        if buf[:magic_len] != AUTH_MAGIC:
+            log.info("Bridge auth: no AUTH magic from %s — legacy direct client",
+                     c.address)
             return True
-        if c.recv_buffer[len(AUTH_MAGIC):need] != SHARED_SECRET:
-            log.warning("Bridge auth FAILED from %s — got=%r expected=%r",
-                        c.address,
-                        c.recv_buffer[len(AUTH_MAGIC):need][:32],
-                        SHARED_SECRET[:32])
-            c.socket.close()
+        if len(buf) < magic_len + 1:
+            return False
+        secret_len = buf[magic_len]
+        total_needed = magic_len + 1 + secret_len
+        if len(buf) < total_needed:
+            return False
+        received_secret = buf[magic_len + 1:total_needed]
+        if received_secret != SHARED_SECRET:
+            log.warning("Bridge auth FAILED from %s — wrong secret (got %d bytes)",
+                        c.address, secret_len)
+            self._mark_for_drop(c)
+            return False
+        try:
+            c.socket.sendall(bytes([AUTH_OK]))
+        except OSError:
+            self._mark_for_drop(c)
             return False
         log.info("Bridge auth OK from %s — SNCP stream open", c.address)
-        c.recv_buffer = c.recv_buffer[need:]
+        c.recv_buffer = buf[total_needed:]
         return True
+
+    def _mark_for_drop(self, c: ClientInfo):
+        """Close the socket and remove the ClientInfo from self.clients
+        so the next select.select() doesn't see a closed FD (that raises
+        ValueError: file descriptor cannot be a negative integer)."""
+        try:
+            c.socket.close()
+        except OSError:
+            pass
+        for k in list(self.clients.keys()):
+            if self.clients[k] is c:
+                del self.clients[k]
+                break
 
     # ---------- main loop ----------
 
@@ -1401,8 +1437,24 @@ class UtenyaaServer:
 
         try:
             while self._running:
-                rlist = [self.server_socket] + [c.socket for c in self.clients.values()]
-                r, _, _ = select.select(rlist, [], [], 0.01)
+                # Defensively skip any client whose socket has been closed
+                # (fileno() == -1) — passing -1 to select() raises a
+                # ValueError that takes the whole server down.
+                rlist = [self.server_socket]
+                for c in list(self.clients.values()):
+                    try:
+                        if c.socket.fileno() < 0:
+                            self._mark_for_drop(c)
+                            continue
+                    except (OSError, AttributeError):
+                        self._mark_for_drop(c)
+                        continue
+                    rlist.append(c.socket)
+                try:
+                    r, _, _ = select.select(rlist, [], [], 0.01)
+                except (ValueError, OSError) as e:
+                    log.warning("select() rejected fd: %s — pruning closed sockets", e)
+                    continue
                 for sock in r:
                     if sock is self.server_socket:
                         try:
