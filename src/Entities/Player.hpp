@@ -153,33 +153,35 @@ namespace Entities
 
 		/** @brief Handle player movement
 		 *
-		 * 8-directional D-pad-relative scheme:
-		 *   - UP/DOWN/LEFT/RIGHT map directly to world-space movement
-		 *     along +Y/-Y/-X/+X. Diagonals (UP+RIGHT etc.) move at the
-		 *     correct speed (normalized by 1/√2) so diagonal isn't
-		 *     √2× faster than cardinal.
-		 *   - The character auto-rotates to face the movement direction
-		 *     each frame, so HandleActions() (which derives bullet
-		 *     direction from this->angle via cos/sin) keeps working —
-		 *     bullets fire in the direction you're moving.
-		 *   - When no D-pad input, the character holds its last facing
-		 *     and stands still, so you can fire in your last-moved
-		 *     direction without re-pressing the stick.
+		 * Two schemes selected at runtime by peripheral type:
 		 *
-		 * The boundary / ground-slope / dynamic-collider / static-
-		 * collider passes below are unchanged from the upstream tank-
-		 * controls implementation.
+		 *   1. Default (Saturn standard pad, OR 3D Control Pad in
+		 *      DIGITAL mode):
+		 *      - Tank controls verbatim from upstream:
+		 *        UP/DOWN move forward/backward along current facing,
+		 *        LEFT/RIGHT rotate the character.
+		 *
+		 *   2. 3D Control Pad in ANALOG mode (peripheral ID 0x16,
+		 *      i.e. the user has flipped the switch on the controller
+		 *      to the "3D" position):
+		 *      - 8-direction screen-relative movement: UP = world +Y
+		 *        (screen up), RIGHT = world +X (screen right), etc.
+		 *        D-pad gives 8 directions; analog stick gives smooth
+		 *        magnitude with a 32-unit deadzone.
+		 *      - Character auto-rotates to face movement direction each
+		 *        frame so HandleActions() bullet/bomb fire (cos/sin of
+		 *        this->angle) goes the way you're moving.
+		 *
+		 * Downstream boundary / ground-slope / dynamic-collider /
+		 * static-collider passes are common to both schemes — only the
+		 * way `movementDir` is computed and `this->angle` is updated
+		 * differs.
 		 */
 		void HandleMovement()
 		{
-			Fxp inX = Fxp(0.0);
-			Fxp inY = Fxp(0.0);
-
 			// Resolve physical Saturn pad port for this Player's controller.
-			// In offline multi-local play this is the Nth available pad. In
-			// online play, our owned pids map to ports 0 and 1 (handled
-			// inside IsControllerButtonPressed for digital input; mirror
-			// the same routing here for raw analog access).
+			// Mirrors Helpers::IsControllerButtonPressed routing exactly:
+			//  offline → Nth available pad; online local → port 0/1.
 			int physPort = -1;
 			if (g_Game.isOnlineMode && g_Game.gameState == UGAME_STATE_GAMEPLAY)
 			{
@@ -193,105 +195,145 @@ namespace Entities
 				physPort = Helpers::GetNthAvailableController(this->controller);
 			}
 
-			// 3D Control Pad in analog mode reports peripheral ID 0x16 with
-			// PerAnalog layout (x at byte 8, y at byte 9; 0x80 = centered;
-			// X: 0x00=left, 0xFF=right; Y: 0x00=up, 0xFF=down). Read it if
-			// available; on standard pad (id=0x02) or 3D pad in DIGITAL
-			// mode this branch is skipped and we fall back to the D-pad.
-			bool analogUsed = false;
+			// Detect 3D Control Pad in analog mode — peripheral ID 0x16.
+			// Standard pad (0x02) and 3D pad in DIGITAL mode (also 0x02)
+			// take the legacy tank-controls path below.
+			bool useAnalogScheme = false;
 			if (physPort >= 0 && physPort < JO_INPUT_MAX_DEVICE && Smpc_Peripheral)
 			{
-				PerDigital* p = &Smpc_Peripheral[physPort];
-				if (p->id == 0x16)
+				if (Smpc_Peripheral[physPort].id == 0x16)
+					useAnalogScheme = true;
+			}
+
+			// We compute `movementDir` (Vec3 in world space) and update
+			// this->angle differently per scheme, then run the shared
+			// downstream logic below.
+			Vec3 movementDir = Vec3(Fxp(0.0), Fxp(0.0), Fxp(0.0));
+			bool willMove = false;
+
+			if (useAnalogScheme)
+			{
+				/* === 3D Control Pad analog scheme === */
+
+				// Read analog stick first; deadzone means small drift around
+				// center is ignored. Falls back to D-pad if stick centered.
+				Fxp inX = Fxp(0.0);
+				Fxp inY = Fxp(0.0);
+				bool analogActive = false;
+				PerAnalog* a = (PerAnalog*)&Smpc_Peripheral[physPort];
+				int rawX = (int)a->x - 128;
+				int rawY = (int)a->y - 128;
+				const int DEADZONE = 32;
+				if (rawX > DEADZONE || rawX < -DEADZONE ||
+				    rawY > DEADZONE || rawY < -DEADZONE)
 				{
-					PerAnalog* a = (PerAnalog*)p;
-					int rawX = (int)a->x - 128;   /* -128 .. +127 */
-					int rawY = (int)a->y - 128;
-					const int DEADZONE = 32;       /* ~25 % of full deflection */
-					if (rawX > DEADZONE || rawX < -DEADZONE ||
-					    rawY > DEADZONE || rawY < -DEADZONE)
+					const Fxp INV_127 = Fxp(1.0 / 127.0);
+					inX =  Fxp::FromInt(rawX) * INV_127;
+					inY = -Fxp::FromInt(rawY) * INV_127;
+					analogActive = true;
+				}
+				if (!analogActive)
+				{
+					// D-pad fallback. Independent ±1 contributions → 8 dirs.
+					if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_RIGHT)) inX = inX + Fxp(1.0);
+					if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_LEFT))  inX = inX - Fxp(1.0);
+					if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_UP))    inY = inY + Fxp(1.0);
+					if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_DOWN))  inY = inY - Fxp(1.0);
+					if (inX != Fxp(0.0) && inY != Fxp(0.0))
 					{
-						/* Map -128..+127 to ~-1.0..+1.0 fxp. Y is inverted
-						 * because Saturn analog Y reads HIGHER for stick-down,
-						 * but we want positive inY = screen up. */
-						const Fxp INV_127 = Fxp(1.0 / 127.0);
-						inX =  Fxp::FromInt(rawX) * INV_127;
-						inY = -Fxp::FromInt(rawY) * INV_127;
-						analogUsed = true;
+						const Fxp INV_SQRT2 = Fxp(0.7071);
+						inX = inX * INV_SQRT2;
+						inY = inY * INV_SQRT2;
 					}
 				}
-			}
 
-			// Digital D-pad fallback (works for standard Saturn pad AND for
-			// the 3D Control Pad in digital mode AND when the analog stick
-			// is inside the deadzone). Independent UP/DOWN/LEFT/RIGHT bits
-			// give 8-direction diagonals naturally.
-			if (!analogUsed)
-			{
-				if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_RIGHT)) inX = inX + Fxp(1.0);
-				if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_LEFT))  inX = inX - Fxp(1.0);
-				if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_UP))    inY = inY + Fxp(1.0);
-				if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_DOWN))  inY = inY - Fxp(1.0);
-			}
+				if (inX == Fxp(0.0) && inY == Fxp(0.0))
+					return;  // no input — no rotation, no movement
 
-			// No input → don't move and don't rotate (preserve last facing).
-			if (inX == Fxp(0.0) && inY == Fxp(0.0)) return;
-
-			// Normalize diagonals so diagonal speed matches cardinal speed
-			// (1/√2 ≈ 0.7071). Pure axis presses keep magnitude 1.
-			if (inX != Fxp(0.0) && inY != Fxp(0.0))
-			{
-				const Fxp INV_SQRT2 = Fxp(0.7071);
-				inX = inX * INV_SQRT2;
-				inY = inY * INV_SQRT2;
-			}
-
-			// Auto-rotate to face the movement direction. With a digital
-			// D-pad there are exactly 8 possible result angles — snap to
-			// the right one. If smooth rotation is wanted later, lerp
-			// this->angle toward targetAngle here instead of assigning.
-			{
-				Fxp targetAngle;
-				if (inY > Fxp(0.0))
+				// Auto-rotate to face the movement direction (snap to 8).
 				{
-					if (inX > Fxp(0.0))      targetAngle = Fxp(Trigonometry::RadPi * 0.25);  // NE
-					else if (inX < Fxp(0.0)) targetAngle = Fxp(Trigonometry::RadPi * 0.75);  // NW
-					else                     targetAngle = Fxp(Trigonometry::RadPi * 0.5);   // N
+					Fxp targetAngle;
+					if (inY > Fxp(0.0))
+					{
+						if (inX > Fxp(0.0))      targetAngle = Fxp(Trigonometry::RadPi * 0.25);
+						else if (inX < Fxp(0.0)) targetAngle = Fxp(Trigonometry::RadPi * 0.75);
+						else                     targetAngle = Fxp(Trigonometry::RadPi * 0.5);
+					}
+					else if (inY < Fxp(0.0))
+					{
+						if (inX > Fxp(0.0))      targetAngle = Fxp(Trigonometry::RadPi * 1.75);
+						else if (inX < Fxp(0.0)) targetAngle = Fxp(Trigonometry::RadPi * 1.25);
+						else                     targetAngle = Fxp(Trigonometry::RadPi * 1.5);
+					}
+					else
+					{
+						if (inX > Fxp(0.0)) targetAngle = Fxp(0.0);
+						else                targetAngle = Fxp(Trigonometry::RadPi);
+					}
+					this->angle = targetAngle;
 				}
-				else if (inY < Fxp(0.0))
-				{
-					if (inX > Fxp(0.0))      targetAngle = Fxp(Trigonometry::RadPi * 1.75);  // SE
-					else if (inX < Fxp(0.0)) targetAngle = Fxp(Trigonometry::RadPi * 1.25);  // SW
-					else                     targetAngle = Fxp(Trigonometry::RadPi * 1.5);   // S
-				}
-				else
-				{
-					// inY == 0, so inX is non-zero (we returned early on all-zero).
-					if (inX > Fxp(0.0)) targetAngle = Fxp(0.0);                      // E
-					else                targetAngle = Fxp(Trigonometry::RadPi);      // W
-				}
-				this->angle = targetAngle;
-			}
 
-			// Movement step
-			{
-				// Get current ground tile (for material check + below)
+				// Build movement vector from intent × speed × dt.
 				Objects::Terrain::Ground ground;
 				ground.Height = 0.0;
 				Objects::Terrain::GetGround(this->position, &ground);
-
-				// Waterlogged tiles slow movement (preserved upstream rule).
 				Fxp moveBy = Player::MovementSpeed;
 				if (ground.Material == 4 || ground.Material == 6)
-				{
 					moveBy *= Fxp(0.6);
+				moveBy = moveBy * Fxp::BuildRaw(delta_time);
+				movementDir = Vec3(inX * moveBy, inY * moveBy, Fxp(0.0));
+				willMove = true;
+			}
+			else
+			{
+				/* === Default tank controls (verbatim upstream behavior) === */
+				Fxp moveBy = Fxp(0.0);
+				Fxp rotateBy = Fxp(0.0);
+
+				if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_LEFT))
+					rotateBy = Player::RotationSpeed;
+				else if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_RIGHT))
+					rotateBy = -Player::RotationSpeed;
+
+				if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_UP))
+					moveBy = Player::MovementSpeed;
+				else if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_DOWN))
+					moveBy = -Player::MovementSpeed;
+
+				if (rotateBy != Fxp(0.0))
+				{
+					this->angle += rotateBy * Fxp::BuildRaw(delta_time);
+					if (this->angle < Fxp(0.0))
+						this->angle += Fxp(Trigonometry::RadPi * 2.0);
+					else if (this->angle >= Fxp(Trigonometry::RadPi * 2.0))
+						this->angle -= Fxp(Trigonometry::RadPi * 2.0);
 				}
 
+				if (moveBy == Fxp(0.0))
+					return;  // rotation only; nothing left to do this frame
+
+				Objects::Terrain::Ground ground;
+				ground.Height = 0.0;
+				Objects::Terrain::GetGround(this->position, &ground);
+				if (ground.Material == 4 || ground.Material == 6)
+					moveBy *= Fxp(0.6);
+
+				ANGLE angle = Trigonometry::RadiansToSgl(this->angle);
 				moveBy = moveBy * Fxp::BuildRaw(delta_time);
-				// Movement vector is the D-pad intent scaled by speed×dt,
-				// not cos/sin of facing — that's the whole point of the
-				// new control scheme.
-				Vec3 movementDir = Vec3(inX * moveBy, inY * moveBy, Fxp(0.0));
+				movementDir = Vec3(
+					Fxp::BuildRaw(slCos(angle)) * moveBy,
+					Fxp::BuildRaw(slSin(angle)) * moveBy,
+					Fxp(0.0));
+				willMove = true;
+			}
+
+			if (!willMove) return;
+
+			// === Common downstream pass: boundary + slope + collisions ===
+			{
+				Objects::Terrain::Ground ground;
+				ground.Height = 0.0;
+				Objects::Terrain::GetGround(this->position, &ground);
 
 				Fxp boundry = Fxp::BuildRaw(Objects::Map::MapDimensionSize << 19);
 
