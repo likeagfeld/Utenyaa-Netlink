@@ -152,67 +152,93 @@ namespace Entities
 		}
 
 		/** @brief Handle player movement
+		 *
+		 * 8-directional D-pad-relative scheme:
+		 *   - UP/DOWN/LEFT/RIGHT map directly to world-space movement
+		 *     along +Y/-Y/-X/+X. Diagonals (UP+RIGHT etc.) move at the
+		 *     correct speed (normalized by 1/√2) so diagonal isn't
+		 *     √2× faster than cardinal.
+		 *   - The character auto-rotates to face the movement direction
+		 *     each frame, so HandleActions() (which derives bullet
+		 *     direction from this->angle via cos/sin) keeps working —
+		 *     bullets fire in the direction you're moving.
+		 *   - When no D-pad input, the character holds its last facing
+		 *     and stands still, so you can fire in your last-moved
+		 *     direction without re-pressing the stick.
+		 *
+		 * The boundary / ground-slope / dynamic-collider / static-
+		 * collider passes below are unchanged from the upstream tank-
+		 * controls implementation.
 		 */
 		void HandleMovement()
 		{
-			Fxp moveBy;
-			Fxp rotateBy;
+			// Read D-pad as a 2D intent vector. UP/DOWN/LEFT/RIGHT are
+			// independent so simultaneous presses give diagonals.
+			Fxp inX = 0.0;
+			Fxp inY = 0.0;
+			if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_RIGHT)) inX = inX + Fxp(1.0);
+			if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_LEFT))  inX = inX - Fxp(1.0);
+			if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_UP))    inY = inY + Fxp(1.0);
+			if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_DOWN))  inY = inY - Fxp(1.0);
 
-			// Rotate player
-			if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_LEFT))
-			{
-				rotateBy = Player::RotationSpeed;
-			}
-			else if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_RIGHT))
-			{
-				rotateBy = -Player::RotationSpeed;
-			}
+			// No input → don't move and don't rotate (preserve last facing).
+			if (inX == Fxp(0.0) && inY == Fxp(0.0)) return;
 
-			// Move player
-			if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_UP))
+			// Normalize diagonals so diagonal speed matches cardinal speed
+			// (1/√2 ≈ 0.7071). Pure axis presses keep magnitude 1.
+			if (inX != Fxp(0.0) && inY != Fxp(0.0))
 			{
-				moveBy = Player::MovementSpeed;
-			}
-			else if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_DOWN))
-			{
-				moveBy = -Player::MovementSpeed;
+				const Fxp INV_SQRT2 = Fxp(0.7071);
+				inX = inX * INV_SQRT2;
+				inY = inY * INV_SQRT2;
 			}
 
-			// Clamp rotation
-			if (rotateBy != 0.0)
+			// Auto-rotate to face the movement direction. With a digital
+			// D-pad there are exactly 8 possible result angles — snap to
+			// the right one. If smooth rotation is wanted later, lerp
+			// this->angle toward targetAngle here instead of assigning.
 			{
-				this->angle += rotateBy * Fxp::BuildRaw(delta_time);
-
-				if (this->angle < 0.0)
+				Fxp targetAngle;
+				if (inY > Fxp(0.0))
 				{
-					this->angle += Fxp(Trigonometry::RadPi * 2.0);
+					if (inX > Fxp(0.0))      targetAngle = Fxp(Trigonometry::RadPi * 0.25);  // NE
+					else if (inX < Fxp(0.0)) targetAngle = Fxp(Trigonometry::RadPi * 0.75);  // NW
+					else                     targetAngle = Fxp(Trigonometry::RadPi * 0.5);   // N
 				}
-				else if (this->angle >= Fxp(Trigonometry::RadPi * 2.0))
+				else if (inY < Fxp(0.0))
 				{
-					this->angle -= Fxp(Trigonometry::RadPi * 2.0);
+					if (inX > Fxp(0.0))      targetAngle = Fxp(Trigonometry::RadPi * 1.75);  // SE
+					else if (inX < Fxp(0.0)) targetAngle = Fxp(Trigonometry::RadPi * 1.25);  // SW
+					else                     targetAngle = Fxp(Trigonometry::RadPi * 1.5);   // S
 				}
+				else
+				{
+					// inY == 0, so inX is non-zero (we returned early on all-zero).
+					if (inX > Fxp(0.0)) targetAngle = Fxp(0.0);                      // E
+					else                targetAngle = Fxp(Trigonometry::RadPi);      // W
+				}
+				this->angle = targetAngle;
 			}
 
-			// Try move
-			if (moveBy != 0.0)
+			// Movement step
 			{
-				// Get current ground tile
+				// Get current ground tile (for material check + below)
 				Objects::Terrain::Ground ground;
 				ground.Height = 0.0;
 				Objects::Terrain::GetGround(this->position, &ground);
 
-				// Waterlogged tiles
+				// Waterlogged tiles slow movement (preserved upstream rule).
+				Fxp moveBy = Player::MovementSpeed;
 				if (ground.Material == 4 || ground.Material == 6)
 				{
-					moveBy *= 0.6;
+					moveBy *= Fxp(0.6);
 				}
 
-				ANGLE angle = Trigonometry::RadiansToSgl(this->angle);
 				moveBy = moveBy * Fxp::BuildRaw(delta_time);
-				Vec3 movementDir = Vec3(
-					Fxp::BuildRaw(slCos(angle)) * moveBy,
-					Fxp::BuildRaw(slSin(angle)) * moveBy,
-					0.0);
+				// Movement vector is the D-pad intent scaled by speed×dt,
+				// not cos/sin of facing — that's the whole point of the
+				// new control scheme.
+				Vec3 movementDir = Vec3(inX * moveBy, inY * moveBy, Fxp(0.0));
 
 				Fxp boundry = Fxp::BuildRaw(Objects::Map::MapDimensionSize << 19);
 
