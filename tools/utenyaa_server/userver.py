@@ -1394,6 +1394,27 @@ class UtenyaaServer:
         if c.authenticated:
             self._broadcast(build_player_leave(uid))
             self._broadcast_lobby()
+            # If they were in an active match, mark the dropped player
+            # (and any P2 co-op slots they owned) dead so the alive_count
+            # check in _tick_match can fire and end the match cleanly.
+            # Otherwise the match runs forever while bots tick against
+            # ghost players who left ages ago.
+            if self.match is not None and c.in_game:
+                affected_pids = [c.game_pid] + list(c.local_pids)
+                for pid in affected_pids:
+                    p = self.game_players.get(pid)
+                    if p and p.alive:
+                        p.alive = False
+                        p.hp = 0
+                        self._broadcast(build_player_kill(pid, 0xFF))
+                # If no humans are left in the match at all, just end it.
+                any_human_left = any(
+                    cc.in_game for cc in self.clients.values()
+                    if cc.authenticated and cc is not c
+                )
+                if not any_human_left:
+                    log.info("Last human left mid-match — ending match.")
+                    self._end_match(sudden=False)
         log.info("Client disconnected: %s", c.username or c.address)
 
     # ---------- bridge auth (handshake before SNCP framing begins) ----------
