@@ -29,7 +29,11 @@ extern "C" {
 #define UNET_HEARTBEAT_INTERVAL   600   /* frames (~10s at 60fps) */
 #define UNET_AUTH_TIMEOUT         300   /* frames (~5s) */
 #define UNET_AUTH_MAX_RETRIES       5
-#define UNET_MAX_PACKETS_FRAME     24
+/* With UNET_RX_MAX_PER_POLL bumped to 192 bytes/frame, at average ~6
+ * bytes/frame for typical opcodes we could see ~32 frames/poll worst
+ * case. Bump dispatch budget to match so we don't leave parsed-but-
+ * unprocessed frames sitting in the buffer. */
+#define UNET_MAX_PACKETS_FRAME     48
 #define UNET_INPUT_BUFFER_PER_PLAYER 8
 #define UNET_LEADERBOARD_MAX       10
 

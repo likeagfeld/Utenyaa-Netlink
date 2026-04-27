@@ -125,7 +125,18 @@ extern "C" {
 #define UNET_STAGE_COUNT        4  /* Island, Cross, Valley, Railway */
 #define UNET_RX_FRAME_SIZE    512
 #define UNET_TX_FRAME_SIZE    128
-#define UNET_RX_MAX_PER_POLL   48
+/* UART hardware FIFO is 16 bytes. At 14400 baud the modem delivers
+ * ~1440 bytes/sec. Utenyaa renders at variable framerate (often 25-30
+ * fps under SGL load), so 1440/25 = ~58 bytes incoming per game frame
+ * worst case. The previous 48-byte budget could not keep up — FIFO
+ * overflowed, bytes were lost, and SNCP frames went out of alignment.
+ * Once misaligned the parser stays out of sync since each garbage
+ * "length prefix" eats two more random bytes. Symptom: WELCOME never
+ * decodes, client stuck in AUTHENTICATING for 5×UNET_AUTH_TIMEOUT
+ * (~25-50s depending on framerate), then DISCONNECT → kicked to title.
+ * 192 bytes/frame is well above 14.4 kbaud throughput at any plausible
+ * framerate — keeps the FIFO drained even at 15 fps. */
+#define UNET_RX_MAX_PER_POLL  192
 
 #define UNET_HP_MAX             6  /* matches Player::MaxHealth */
 #define UNET_MATCH_SECONDS    120  /* default; overridable in lobby */
