@@ -33,6 +33,16 @@ void unet_glue_tick_frame(void);
 /** Start the online flow (called from the MainMenu ONLINE button). */
 void unet_glue_enter_online(void);
 
+/** Number of distinct selectable characters in CHARS.PAK (one fewer than
+ *  UNET_MAX_CHARACTERS in the protocol — the protocol leaves headroom for
+ *  future asset growth). The lobby clamps cycling to this count. */
+int unet_glue_num_characters(void);
+
+/** First sprite slot for a given character_id (clamped). Used by lobby.c
+ *  with jo_sprite_draw3D to render the actual character art instead of
+ *  showing a numeric ID. */
+int unet_glue_character_sprite_for(uint8_t character_id);
+
 /** True iff gameState indicates an online screen should render this frame
  *  (so the C++ offline renderer skips its logo/title path). */
 bool unet_glue_is_online_screen_active(void);

@@ -97,14 +97,19 @@ static bool character_taken(uint8_t char_id, uint8_t my_id)
 
 static uint8_t next_available_character(uint8_t from, int direction)
 {
-    uint8_t c = from;
+    /* Clamp cycling to the actual asset count from CHARS.PAK
+     * (5 distinct characters × 5 frames each), not the protocol's
+     * UNET_MAX_CHARACTERS = 12 ceiling. */
+    int max = unet_glue_num_characters();
+    if (max < 1) max = 1;
+    uint8_t c = (from < (uint8_t)max) ? from : 0;
     int tries = 0;
-    for (tries = 0; tries < UNET_MAX_CHARACTERS; tries++) {
-        if (direction > 0) c = (uint8_t)((c + 1) % UNET_MAX_CHARACTERS);
-        else                c = (uint8_t)((c + UNET_MAX_CHARACTERS - 1) % UNET_MAX_CHARACTERS);
+    for (tries = 0; tries < max; tries++) {
+        if (direction > 0) c = (uint8_t)((c + 1) % max);
+        else               c = (uint8_t)((c + max - 1) % max);
         if (!character_taken(c, g_Game.myPlayerID)) return c;
     }
-    return from;  /* all taken (shouldn't happen with 4-max-players / 12-chars) */
+    return from;  /* all taken (shouldn't happen with 4-max-players / 5-chars) */
 }
 
 /*============================================================================
@@ -416,30 +421,41 @@ void lobby_draw(void)
         g_z_page = 0;
     }
 
-    /* Player roster: NAME · CHAR · VOTE · READY */
-    font_draw("#  NAME             CHAR  VOTE    STATUS",
+    /* Player roster: NAME · CHAR (sprite) · VOTE · READY.
+     * The character column shows the actual selected sprite via
+     * jo_sprite_draw3D — same convention Flicky's Flock uses for
+     * its bird picker. Empty slot = "--" placeholder text. */
+    font_draw("#  NAME             CHAR    VOTE    STATUS",
               FONT_X(1), FONT_Y(6), 500);
     for (i = 0; i < nd->lobby_count && i < UNET_MAX_PLAYERS; i++) {
         const unet_lobby_player_t* lp = &nd->lobby_players[i];
         const char* vote_str;
-        char char_str[4];
         char marker;
 
         if (!lp->active) continue;
         marker = (lp->id == g_Game.myPlayerID) ? '>' : ' ';
 
-        if (lp->character_id == 0xFF) {
-            char_str[0] = '-'; char_str[1] = '-'; char_str[2] = '\0';
-        } else {
-            sprintf(char_str, "%02d", (int)lp->character_id);
-        }
-
         vote_str = (lp->stage_vote == 0xFF) ? "-----" : STAGE_NAMES[lp->stage_vote];
 
+        /* Text portion (everything except the character sprite column) */
         font_printf(FONT_X(1), FONT_Y(7 + i), 500,
-                    "%c%-2d %-16s  %2s  %-7s %s",
-                    marker, i + 1, lp->name, char_str, vote_str,
+                    "%c%-2d %-16s        %-7s %s",
+                    marker, i + 1, lp->name, vote_str,
                     lp->ready ? "READY" : "     ");
+
+        /* Character sprite — rendered as a VDP1 quad on top of the
+         * NBG0 text. Position chosen to land in the CHAR column. */
+        if (lp->character_id != 0xFF &&
+            lp->character_id < unet_glue_num_characters())
+        {
+            int sprite = unet_glue_character_sprite_for(lp->character_id);
+            jo_sprite_draw3D(sprite,
+                             FONT_X(22) + 8,
+                             FONT_Y(7 + i) + 4,
+                             499);
+        } else {
+            font_draw("--", FONT_X(22), FONT_Y(7 + i), 500);
+        }
     }
 
     /* Stage vote tally */

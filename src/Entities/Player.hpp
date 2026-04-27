@@ -418,6 +418,14 @@ namespace Entities
 			Player::CharacterSpiteStart = id;
 		}
 
+		/** @brief Read-only accessor for the first character sprite slot.
+		 *  Used by the C-linkage glue so lobby.c can render a player's
+		 *  selected character in the roster (instead of just a number). */
+		static int GetCharacterSpriteStart()
+		{
+			return Player::CharacterSpiteStart;
+		}
+
 		/** @brief Initializes a new instance of the StaticDetail3D class
 		 * @param position Position in the scene
 		 * @param model render model of the static detail

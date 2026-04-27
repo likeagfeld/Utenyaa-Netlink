@@ -14,6 +14,24 @@
 
 #include "net/utenyaa_main_glue.h"
 #include "utenyaa_online_bridge.hpp"
+#include "Entities/Player.hpp"
+
+/* === C-linkage shims so the C lobby/screen code can read C++ engine
+ *     state (sprite slots, character counts) without including C++. === */
+extern "C" int unet_glue_num_characters(void)
+{
+	/* CHARS.PAK ships 25 textures × 5 frames per character = 5 chars.
+	 * Hardcoded constant matches Player::FramesPerController. */
+	return 5;
+}
+
+extern "C" int unet_glue_character_sprite_for(uint8_t character_id)
+{
+	const int frames_per_char = 5;
+	int n = unet_glue_num_characters();
+	int idx = (character_id < (uint8_t)n) ? (int)character_id : 0;
+	return Entities::Player::GetCharacterSpriteStart() + idx * frames_per_char;
+}
 
 jo_camera camera;
 int logo;

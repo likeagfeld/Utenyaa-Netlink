@@ -690,7 +690,7 @@ class UtenyaaServer:
             "allow_bots_start":       True,   # whether bots alone can meet MIN_TO_START
             "timer_broadcast_hz":     1,      # MATCH_TIMER broadcasts per second
             "sudden_death_enabled":   True,
-            "verbose_rx_log":         False,  # log every RX frame opcode (alpha-only diag)
+            "verbose_rx_log":         True,   # alpha: log every RX while debugging start-flow
         }
 
         # Lobby players (keyed by game_pid 0..3, mapped from client user_id)
@@ -788,11 +788,10 @@ class UtenyaaServer:
 
     def _lobby_roster(self) -> list:
         out = []
-        # Humans
+        # Humans + their P2 co-op slots (one row per local name)
         for uid, c in self.clients.items():
             if not c.authenticated:
                 continue
-            pid = c.game_pid if c.in_game else uid % MAX_PLAYERS
             out.append({
                 "id": uid,
                 "name": c.username,
@@ -800,6 +799,19 @@ class UtenyaaServer:
                 "character_id": c.character_id,
                 "stage_vote": c.stage_vote
             })
+            # Co-op P2 names registered via ADD_LOCAL_PLAYER. Synthetic
+            # id = 100+offset so the client knows it's a P2 slot (not a
+            # real server uid). Inherits the parent's ready flag.
+            local_chars = getattr(c, "local_characters", [])
+            for j, p2_name in enumerate(c.local_names):
+                p2_char = local_chars[j] if j < len(local_chars) else 0xFF
+                out.append({
+                    "id": 100 + (uid * 4) + j,
+                    "name": p2_name,
+                    "ready": c.ready,
+                    "character_id": p2_char,
+                    "stage_vote": 0xFF
+                })
         # Bots
         for bot in self.bots:
             out.append({
@@ -886,19 +898,24 @@ class UtenyaaServer:
 
     def _on_start_game_req(self, c: ClientInfo):
         if self.match is not None:
+            log.info("START_GAME_REQ from %s rejected: match already active", c.username)
             return
         ready_humans = [cc for cc in self.clients.values()
                         if cc.authenticated and cc.ready]
-        # A single console running co-op counts as 2 slots already via
-        # ADD_LOCAL_PLAYER, but co-op isn't yet wired to add a bot-equivalent
-        # slot in this server revision. Require 1 ready human + any mix of
-        # bots / other humans totalling >= MIN_TO_START.
+        # Count slots: ready humans + each ready human's registered
+        # co-op names + bots. Pre-match local_pids is empty so we use
+        # local_names instead (fixed: previously used local_pids).
         total_slots = len(ready_humans) + len(self.bots)
-        # P2 locals contribute extra slots
         for cc in ready_humans:
-            total_slots += len(cc.local_pids)
+            total_slots += len(cc.local_names)
+        log.info("START_GAME_REQ from %s: ready_humans=%d bots=%d "
+                 "p2_names=%d total_slots=%d (need %d)",
+                 c.username, len(ready_humans), len(self.bots),
+                 sum(len(cc.local_names) for cc in ready_humans),
+                 total_slots, MIN_TO_START)
         if total_slots < MIN_TO_START:
             c.send_raw(build_log(f"Need {MIN_TO_START} players to start"))
+            log.info("START_GAME_REQ rejected: insufficient slots")
             return
 
         stage = self._pick_stage()
