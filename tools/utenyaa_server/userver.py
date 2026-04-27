@@ -690,7 +690,7 @@ class UtenyaaServer:
             "allow_bots_start":       True,   # whether bots alone can meet MIN_TO_START
             "timer_broadcast_hz":     1,      # MATCH_TIMER broadcasts per second
             "sudden_death_enabled":   True,
-            "verbose_rx_log":         True,   # log every RX frame opcode
+            "verbose_rx_log":         False,  # log every RX frame opcode (alpha-only diag)
         }
 
         # Lobby players (keyed by game_pid 0..3, mapped from client user_id)

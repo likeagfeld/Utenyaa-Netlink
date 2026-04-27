@@ -239,17 +239,4 @@ void connecting_draw(void)
     }
 
     font_draw_centered("PRESS B TO CANCEL", FONT_Y(26), 500);
-
-    /* Diagnostic strip — last two rows. Lets us read what the modem +
-     * net layer are actually doing on real hardware. */
-    {
-        const unet_state_data_t* d = unet_get_data();
-        font_printf(FONT_X(1), FONT_Y(27), 500,
-                    "RX:%lu TX:%lu FR:%lu ER:%lu HB:%lu",
-                    (unsigned long)d->diag_rx_bytes,
-                    (unsigned long)d->diag_tx_bytes,
-                    (unsigned long)d->diag_frames_decoded,
-                    (unsigned long)d->diag_parse_errors,
-                    (unsigned long)d->diag_heartbeats_sent);
-    }
 }
