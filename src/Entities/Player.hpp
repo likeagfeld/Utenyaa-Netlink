@@ -172,14 +172,67 @@ namespace Entities
 		 */
 		void HandleMovement()
 		{
-			// Read D-pad as a 2D intent vector. UP/DOWN/LEFT/RIGHT are
-			// independent so simultaneous presses give diagonals.
-			Fxp inX = 0.0;
-			Fxp inY = 0.0;
-			if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_RIGHT)) inX = inX + Fxp(1.0);
-			if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_LEFT))  inX = inX - Fxp(1.0);
-			if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_UP))    inY = inY + Fxp(1.0);
-			if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_DOWN))  inY = inY - Fxp(1.0);
+			Fxp inX = Fxp(0.0);
+			Fxp inY = Fxp(0.0);
+
+			// Resolve physical Saturn pad port for this Player's controller.
+			// In offline multi-local play this is the Nth available pad. In
+			// online play, our owned pids map to ports 0 and 1 (handled
+			// inside IsControllerButtonPressed for digital input; mirror
+			// the same routing here for raw analog access).
+			int physPort = -1;
+			if (g_Game.isOnlineMode && g_Game.gameState == UGAME_STATE_GAMEPLAY)
+			{
+				if ((uint8_t)this->controller == g_Game.myPlayerID)
+					physPort = Helpers::GetNthAvailableController(0);
+				else if (g_Game.hasSecondLocal && (uint8_t)this->controller == g_Game.myPlayerID2)
+					physPort = Helpers::GetNthAvailableController(1);
+			}
+			else
+			{
+				physPort = Helpers::GetNthAvailableController(this->controller);
+			}
+
+			// 3D Control Pad in analog mode reports peripheral ID 0x16 with
+			// PerAnalog layout (x at byte 8, y at byte 9; 0x80 = centered;
+			// X: 0x00=left, 0xFF=right; Y: 0x00=up, 0xFF=down). Read it if
+			// available; on standard pad (id=0x02) or 3D pad in DIGITAL
+			// mode this branch is skipped and we fall back to the D-pad.
+			bool analogUsed = false;
+			if (physPort >= 0 && physPort < JO_INPUT_MAX_DEVICE && Smpc_Peripheral)
+			{
+				PerDigital* p = &Smpc_Peripheral[physPort];
+				if (p->id == 0x16)
+				{
+					PerAnalog* a = (PerAnalog*)p;
+					int rawX = (int)a->x - 128;   /* -128 .. +127 */
+					int rawY = (int)a->y - 128;
+					const int DEADZONE = 32;       /* ~25 % of full deflection */
+					if (rawX > DEADZONE || rawX < -DEADZONE ||
+					    rawY > DEADZONE || rawY < -DEADZONE)
+					{
+						/* Map -128..+127 to ~-1.0..+1.0 fxp. Y is inverted
+						 * because Saturn analog Y reads HIGHER for stick-down,
+						 * but we want positive inY = screen up. */
+						const Fxp INV_127 = Fxp(1.0 / 127.0);
+						inX =  Fxp::FromInt(rawX) * INV_127;
+						inY = -Fxp::FromInt(rawY) * INV_127;
+						analogUsed = true;
+					}
+				}
+			}
+
+			// Digital D-pad fallback (works for standard Saturn pad AND for
+			// the 3D Control Pad in digital mode AND when the analog stick
+			// is inside the deadzone). Independent UP/DOWN/LEFT/RIGHT bits
+			// give 8-direction diagonals naturally.
+			if (!analogUsed)
+			{
+				if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_RIGHT)) inX = inX + Fxp(1.0);
+				if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_LEFT))  inX = inX - Fxp(1.0);
+				if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_UP))    inY = inY + Fxp(1.0);
+				if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_DOWN))  inY = inY - Fxp(1.0);
+			}
 
 			// No input → don't move and don't rotate (preserve last facing).
 			if (inX == Fxp(0.0) && inY == Fxp(0.0)) return;
