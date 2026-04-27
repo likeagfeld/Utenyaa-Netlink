@@ -201,8 +201,14 @@ namespace UI
                 jo_clear_screen();
                 screens[currentScreen]->HandleMessages(Messages::Draw());
 			}
-            else if (Settings::IsActive && jo_is_pad1_key_down(JO_KEY_START))
+            else if (Settings::IsActive && jo_is_pad1_key_down(JO_KEY_START)
+                     && !g_Game.isOnlineMode)
             {
+                // Offline only: START toggles pause. In online matches
+                // a unilateral pause would desync the server, AND the
+                // user's still-held START from the lobby's "press START
+                // to begin" would otherwise immediately pause every
+                // freshly-started online match.
                 Settings::IsActive = false;
                 currentScreen = Screen::Pause;
             }

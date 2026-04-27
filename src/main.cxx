@@ -149,19 +149,15 @@ int main()
 			continue;
 		}
 
-		// menu.Update() pauses the game on START, but the user's
-		// still-held START from "press START to begin online match"
-		// would immediately trigger pause on the first online
-		// gameplay frame — locking up gameplay in a flicker loop with
-		// the online-gameplay-start re-arm. Skip the offline menu
-		// entirely when isOnlineMode is set; online flow has its own
-		// state machine via gameState. menu.Update resumes when user
-		// returns to title after disconnect (isOnlineMode → false).
+		// menu.Update has side effects beyond rendering (jo_clear_screen,
+		// state transitions on the GameEnd/Pause screens) that gameplay
+		// relies on for a clean NBG0. Skipping it entirely produces a
+		// black screen during online gameplay. Instead, the START→pause
+		// logic inside menu.Update is gated on !isOnlineMode (see
+		// Menu.hpp:204) so the user's still-held START from the lobby
+		// can no longer pause the freshly-started online match.
 		static UI::Menu menu;
-		if (!g_Game.isOnlineMode)
-		{
-			menu.Update();
-		}
+		menu.Update();
 
 		if (Settings::Quit && worldPtr)
 		{
