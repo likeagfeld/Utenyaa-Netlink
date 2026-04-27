@@ -149,8 +149,19 @@ int main()
 			continue;
 		}
 
+		// menu.Update() pauses the game on START, but the user's
+		// still-held START from "press START to begin online match"
+		// would immediately trigger pause on the first online
+		// gameplay frame — locking up gameplay in a flicker loop with
+		// the online-gameplay-start re-arm. Skip the offline menu
+		// entirely when isOnlineMode is set; online flow has its own
+		// state machine via gameState. menu.Update resumes when user
+		// returns to title after disconnect (isOnlineMode → false).
 		static UI::Menu menu;
-		menu.Update();
+		if (!g_Game.isOnlineMode)
+		{
+			menu.Update();
+		}
 
 		if (Settings::Quit && worldPtr)
 		{

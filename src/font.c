@@ -20,13 +20,19 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-/* Raise NBG0 text-plane priority so jo_printf output is actually
- * visible. Utenyaa's main.cxx calls jo_core_set_screens_order with
+/* Raise NBG0 text-plane priority so jo_printf output is visible above
+ * the backdrop. Utenyaa's main.cxx calls jo_core_set_screens_order with
  * only NBG1 + SPRITE, which leaves NBG0 at priority 0 (hidden).
- * Called from lazy online init so offline is untouched. */
+ *
+ * We use priority 4 — above the backdrop, but BELOW the default sprite
+ * priority of ~7. That layering lets jo_sprite_draw3D-rendered VDP1
+ * quads (e.g., the per-player character icons in the lobby) draw ON
+ * TOP of the NBG0 text plane. Without this, NBG0 at priority 7 would
+ * occlude sprites entirely on every cell (even cells with no glyph,
+ * since NBG0 paints opaque backdrop on empty cells by default). */
 void font_load(void)
 {
-    slPriorityNbg0(7);  /* top priority; above NBG1 logo (if any) + sprites */
+    slPriorityNbg0(4);
 }
 
 /* jo_printf uses a 40-col × 28-row text grid. Our API takes VDP1
