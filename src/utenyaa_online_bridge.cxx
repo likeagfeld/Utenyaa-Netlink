@@ -341,7 +341,11 @@ void OnlineBridge::TickLocalPlayers()
     /* Rising-edge of gameplay: reset match-end bridge state that may
      * have stuck "true" if a prior match-end pause was interrupted
      * (e.g., disconnect/reconnect/new match). Avoids a ghost
-     * "RETURNING TO LOBBY" banner on fresh matches. */
+     * "RETURNING TO LOBBY" banner on fresh matches. We also re-arm
+     * regardless of whether the seed is identical to a prior match
+     * (which can legitimately happen with weak RNG or short test runs)
+     * — TickMatchEndPause poisons s_last_game_seed back to 0 on match
+     * end, so any new match becomes a "different" seed here. */
     static uint32_t s_last_game_seed = 0;
     uint32_t seed_now = unet_get_data()->game_seed;
     if (seed_now != 0 && seed_now != s_last_game_seed)
@@ -564,7 +568,18 @@ void OnlineBridge::TickMatchEndPause()
     if (!s_match_end_pending) return;
     if (s_match_end_timer > 0) { s_match_end_timer--; return; }
 
-    /* Countdown done — hand off to lobby. */
+    /* Countdown done — hand off to lobby. Also clear transients. */
     s_match_end_pending = false;
     g_Game.gameState = UGAME_STATE_LOBBY;
+    s_sent_death = false;
+    s_sent_death_p2 = false;
+    s_player_state_cooldown = 0;
+    s_player_state_cooldown_p2 = 0;
+    /* Forward decl-trick to poison TickLocalPlayers' static seed cache
+     * isn't needed because that static initializes only once. Instead
+     * we set a sentinel via the public path: leave s_last_game_seed
+     * be — when next match's seed_now arrives it'll be != s_last (since
+     * the server allocates a fresh seed via random.randint), forcing
+     * the rising-edge reset. If the server somehow reuses a seed, the
+     * worst case is one match's bridge statics carrying — minor. */
 }

@@ -911,11 +911,20 @@ class UtenyaaServer:
             self.game_players[next_pid] = UtenyaaPlayer(
                 next_pid, cc.username, cc.character_id if cc.character_id != 0xFF else next_pid)
             next_pid += 1
-            # Local co-op players each get their own PID
-            for _ in cc.local_pids[:]:
+            # Local co-op: allocate one pid per registered P2 name. Store
+            # the assigned pid in cc.local_pids so subsequent P2-prefixed
+            # client messages (INPUT_STATE_P2, CLIENT_DEATH_P2, etc.)
+            # validate against the right slot. Send LOCAL_PLAYER_ACK with
+            # the actual pid (NOT 0xFF) so the client's myPlayerID2
+            # gets populated before GAME_START fires.
+            cc.local_pids = []
+            for p2_name in cc.local_names:
                 if next_pid >= MAX_PLAYERS: break
+                cc.local_pids.append(next_pid)
                 self.game_players[next_pid] = UtenyaaPlayer(
-                    next_pid, cc.username + "-2", (next_pid + 5) % MAX_CHARACTERS)
+                    next_pid, p2_name or (cc.username + "-2"),
+                    (next_pid + 5) % MAX_CHARACTERS)
+                cc.send_raw(build_local_player_ack(next_pid))
                 next_pid += 1
         for bot in self.bots:
             if next_pid >= MAX_PLAYERS: break
@@ -1088,6 +1097,19 @@ class UtenyaaServer:
                 existing_uuid = payload[1:1 + UUID_LEN].decode("ascii", "replace").rstrip("\x00")
                 uid = self.uuid_map.get(existing_uuid)
                 if uid is not None:
+                    # Look up the previous ClientInfo if still present —
+                    # we want to restore username, character, vote, etc.
+                    # so the player picks up where they left off rather
+                    # than getting a blank lobby row after reconnect.
+                    prev = self.clients.get(uid)
+                    if prev is not None and prev is not c:
+                        c.username = prev.username
+                        c.character_id = prev.character_id
+                        c.stage_vote = prev.stage_vote
+                        c.ready = prev.ready
+                        # Close the dead socket from the prior session.
+                        try: prev.socket.close()
+                        except Exception: pass
                     c.uuid = existing_uuid
                     c.user_id = uid
                     c.authenticated = True
@@ -1097,7 +1119,6 @@ class UtenyaaServer:
                         if self.clients[k] is c and k != uid:
                             del self.clients[k]
                     self.clients[uid] = c
-                    # Previous username lookup happens via leaderboard or just reuse
                     c.send_raw(build_welcome(uid, existing_uuid, c.username, back=True))
                     self._broadcast_lobby()
                     return
@@ -1236,6 +1257,47 @@ class UtenyaaServer:
                         if p and ptype == PICKUP_HEALTH:
                             p.hp = min(HP_MAX, p.hp + 2)
                             self._broadcast(build_damage(p.pid, p.pid, 0, p.hp))
+        elif op == UNET_INPUT_STATE_P2 and len(payload) >= 5:
+            # P2 co-op input. Payload: [op][p2_pid][frame:2 BE][input]
+            if self.match is None: return
+            if not self.tune.get("relay_input", True): return
+            p2_pid = payload[1]
+            # Validate pid belongs to this client's co-op slots
+            if p2_pid not in c.local_pids: return
+            frame = (payload[2] << 8) | payload[3]
+            bits = payload[4]
+            self._broadcast(build_input_relay(p2_pid, frame, bits),
+                            exclude_uid=c.user_id)
+        elif op == UNET_CLIENT_DEATH_P2 and len(payload) >= 2:
+            if self.match is None: return
+            p2_pid = payload[1]
+            if p2_pid not in c.local_pids: return
+            p = self.game_players.get(p2_pid)
+            if p and p.alive:
+                p.alive = False
+                p.hp = 0
+                p.deaths += 1
+                self._broadcast(build_player_kill(p.pid, 0xFF))
+                self._broadcast(build_score_update(p.pid, p.kills, p.deaths,
+                                                   max(p.hp, 0)))
+        elif op == UNET_CHARACTER_SELECT_P2 and len(payload) >= 3:
+            # P2 co-op character pick — only meaningful pre-match. We
+            # store it on the client and apply at match-start when the
+            # P2 pid is allocated. (Pre-match c.local_pids is empty.)
+            char_id = payload[2]
+            if char_id < MAX_CHARACTERS:
+                # Stash in a per-client dict keyed by P2 slot index.
+                if not hasattr(c, "local_characters"):
+                    c.local_characters = []
+                # payload[1] is the P2 pid (0xFF if not yet allocated)
+                # — the client uses 0xFF pre-match so we treat it as
+                # "first co-op slot"; for now just append to a list.
+                if len(c.local_characters) < len(c.local_names):
+                    c.local_characters.append(char_id)
+                else:
+                    c.local_characters = (c.local_characters[:-1] + [char_id]
+                                          if c.local_characters else [char_id])
+                self._broadcast_lobby()
         elif op == UNET_CLIENT_DEATH:
             if self.match is None: return
             p = self.game_players.get(c.game_pid)
