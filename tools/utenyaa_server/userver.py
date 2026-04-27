@@ -152,6 +152,16 @@ def _clamp16(v: int) -> int:
     return max(-32768, min(32767, int(v)))
 
 
+def _signed32(v: int) -> int:
+    """Wrap a Python int into signed int32 range for struct.pack('!i').
+    Values like -19660800 (a negative fxp crate position) when masked
+    with `& 0xFFFFFFFF` become 4275306496 (unsigned 32-bit) which
+    overflows the !i format's -2^31..2^31-1 range. Use this helper
+    instead of bare masking when packing as signed."""
+    v = int(v) & 0xFFFFFFFF
+    return v if v < 0x80000000 else v - 0x100000000
+
+
 def encode_frame(payload: bytes) -> bytes:
     return struct.pack("!H", len(payload)) + payload
 
@@ -224,7 +234,7 @@ def build_game_start(seed: int, my_id: int, stage: int, player_count: int,
     payload += bytes([len(crates) & 0xFF])
     for c in crates:
         payload += bytes([c["slot"] & 0xFF])
-        payload += struct.pack("!iii", c["x"] & 0xFFFFFFFF, c["y"] & 0xFFFFFFFF, c["z"] & 0xFFFFFFFF)
+        payload += struct.pack("!iii", _signed32(c["x"]), _signed32(c["y"]), _signed32(c["z"]))
         payload += bytes([c["flags"] & 0xFF])
     return encode_frame(payload)
 
@@ -1061,8 +1071,11 @@ class UtenyaaServer:
                 bot.pid, self.game_players, self.match.crates)
 
             # Advance bot position so it actually moves in the world
-            p.x = (p.x + ddx) & 0xFFFFFFFF
-            p.y = (p.y + ddy) & 0xFFFFFFFF
+            # Bot positions stay in signed int32 range (consumed by
+            # build_player_sync's '!iiiiii' pack which expects signed).
+            # Don't unsigned-mask — that pushes values past 2^31-1.
+            p.x = _signed32(p.x + ddx)
+            p.y = _signed32(p.y + ddy)
             p.angle = int(heading * 1000)
             p.dx = ddx
             p.dy = ddy
