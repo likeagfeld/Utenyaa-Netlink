@@ -149,15 +149,27 @@ int main()
 			continue;
 		}
 
-		// menu.Update has side effects beyond rendering (jo_clear_screen,
-		// state transitions on the GameEnd/Pause screens) that gameplay
-		// relies on for a clean NBG0. Skipping it entirely produces a
-		// black screen during online gameplay. Instead, the START→pause
-		// logic inside menu.Update is gated on !isOnlineMode (see
-		// Menu.hpp:204) so the user's still-held START from the lobby
-		// can no longer pause the freshly-started online match.
+		// During online GAMEPLAY we must NOT run the offline menu — it
+		// renders text on NBG0 every frame and consumes pad input via
+		// edge-detected presses (ProcessInput). Even with ProcessInput
+		// gated by !Settings::IsActive there's a single-frame race on
+		// the LOBBY→GAMEPLAY transition where IsActive is still false
+		// and a held A/START would walk the offline menu's Intro screen.
+		//
+		// The previous "skip menu entirely" attempt black-screened
+		// because menu.Update is the ONLY caller of jo_clear_screen on
+		// this path — without it, NBG0 + VDP1 framebuffer state from
+		// the prior lobby render persists. Replicate just the side
+		// effect (jo_clear_screen) and skip the rest.
 		static UI::Menu menu;
-		menu.Update();
+		if (g_Game.isOnlineMode && g_Game.gameState == UGAME_STATE_GAMEPLAY)
+		{
+			jo_clear_screen();
+		}
+		else
+		{
+			menu.Update();
+		}
 
 		if (Settings::Quit && worldPtr)
 		{
@@ -208,6 +220,13 @@ int main()
 				startTime = Fxp::FromInt(Settings::TotalSeconds);
 				worldPtr = new Entities::World(Settings::StageFiles[Settings::SelectedStage]);
 				PoneSound::CD::Play(3, 3, true);
+				// Defensive: tell the server our stage is loaded. Server
+				// doesn't currently gate on this but the protocol opcode
+				// is wired (UNET_MSG_STAGE_LOADED_ACK 0x23). Sending it
+				// also drains any pending TX fifo / forces a UART poke
+				// right after the multi-frame CD load — making the
+				// post-World heartbeat path more robust.
+				if (g_Game.isOnlineMode) unet_send_stage_loaded_ack();
 			}
 			slUnitMatrix(0);
 
@@ -304,6 +323,25 @@ int main()
 			Helpers::ShowLogo();
 		}
 
+		// === ALPHA DEBUG STRIP ===
+		// On-screen state telemetry for diagnosing the LOBBY → GAMEPLAY
+		// transition. Visible only in online mode (no impact on offline
+		// title screen / offline play). Renders LAST so it overlays
+		// any other NBG0 text. Remove once online flow is verified.
+		// Format: "gs<gameState> us<unet_state> a<IsActive> w<worldNul>
+		//          op<lastOp> hb<heartbeats> rx<rxBytes>"
+		if (g_Game.isOnlineMode)
+		{
+			const unet_state_data_t* _nd = unet_get_data();
+			jo_printf(0, 27, "gs%d us%d a%d w%d op%02X hb%d rx%d        ",
+				(int)g_Game.gameState,
+				(int)unet_get_state(),
+				Settings::IsActive ? 1 : 0,
+				worldPtr ? 1 : 0,
+				(int)_nd->diag_last_op,
+				(int)_nd->diag_heartbeats_sent,
+				(int)_nd->diag_rx_bytes);
+		}
 
 		slSynch();
 	}

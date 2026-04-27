@@ -56,13 +56,15 @@ static void draw_line(int col, int row, const char* s)
         jo_printf(col, row, "%s", buf);
 }
 
-void font_draw(const char* str, int x, int y, int /*z*/)
+void font_draw(const char* str, int x, int y, int z)
 {
+    (void)z;
     draw_line(px_to_col(x), px_to_row(y), str);
 }
 
-void font_draw_centered(const char* str, int y, int /*z*/)
+void font_draw_centered(const char* str, int y, int z)
 {
+    (void)z;
     if (!str) return;
     int len = 0;
     while (str[len]) len++;
@@ -71,8 +73,9 @@ void font_draw_centered(const char* str, int y, int /*z*/)
     draw_line(col, px_to_row(y), str);
 }
 
-void font_printf(int x, int y, int /*z*/, const char* fmt, ...)
+void font_printf(int x, int y, int z, const char* fmt, ...)
 {
+    (void)z;
     static char buf[80];
     va_list args;
     va_start(args, fmt);
@@ -81,8 +84,9 @@ void font_printf(int x, int y, int /*z*/, const char* fmt, ...)
     draw_line(px_to_col(x), px_to_row(y), buf);
 }
 
-void font_printf_centered(int y, int /*z*/, const char* fmt, ...)
+void font_printf_centered(int y, int z, const char* fmt, ...)
 {
+    (void)z;
     static char buf[80];
     va_list args;
     va_start(args, fmt);
