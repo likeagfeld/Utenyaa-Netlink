@@ -82,6 +82,12 @@ namespace Entities
 		 */
 		uint8_t shootCoolDownTimeLeft;
 
+		/** @brief Rising-edge fire-button gate. Holds the last frame's
+		 *  A-button state so HandleActions can require an actual release
+		 *  + re-press to trigger another shot — prevents auto-fire when
+		 *  the trigger is held and the cooldown elapses. */
+		bool prevAPressed = false;
+
 		/** @brief What pickup player has
 		 */
 		Messages::Pickup::PickupType hasPickup = Messages::Pickup::PickupType::None;
@@ -105,21 +111,26 @@ namespace Entities
 				((uint8_t)this->controller == g_Game.myPlayerID) ||
 				(g_Game.hasSecondLocal && (uint8_t)this->controller == g_Game.myPlayerID2);
 
-			// Do the shooting. HELD + cooldown gating (was rising-edge
-			// only) so the trigger feels consistent: holding A auto-fires
-			// at the cooldown rate (~0.45s @60fps) instead of relying on
-			// per-frame button-down detection that occasionally missed
-			// quick taps. shootCoolDownTimeLeft still rate-limits.
-			if (isLocalCtrl &&
-				Helpers::IsControllerButtonPressed(this->controller, JO_KEY_A) &&
-				this->shootCoolDownTimeLeft == 0)
+			// Do the shooting — explicit rising-edge detection (this->
+			// prevAPressed) so the user MUST release A and press it
+			// again for each shot. No auto-fire on hold even after
+			// cooldown elapses. Tracking our own previous state instead
+			// of jo_engine's `push` field also avoids the upstream
+			// "sometimes works, sometimes doesn't" issue where quick
+			// taps that straddled a vblank boundary were silently
+			// dropped — Helpers::IsControllerButtonPressed reads the
+			// stable held-state, and we compute the rising edge here.
+			const bool aPressedNow = Helpers::IsControllerButtonPressed(this->controller, JO_KEY_A);
+			const bool aRisingEdge = aPressedNow && !this->prevAPressed;
+			if (isLocalCtrl && aRisingEdge && this->shootCoolDownTimeLeft == 0)
 			{
 				PoneSound::Sound::Play(1, PoneSound::PlayMode::Semi, 5);
-				/* 18 frames @ 50 Hz PAL = 360 ms; @ 25 Hz under load = 720 ms.
-				 * Down from upstream's 27 (540/1080 ms) — felt sluggish.
-				 * The HUD shows the live countdown ("18" → "01" → "RDY")
-				 * and the tank body blinks in-world during the wait. */
-				this->shootCoolDownTimeLeft = 18;
+				/* 24 frames @ 50 Hz PAL = 480 ms; @ 25 Hz under load = 960 ms.
+				 * Down from upstream's 27 (540/1080 ms) — keeps the
+				 * original arena feel but slightly snappier. The HUD
+				 * shows the live countdown ("24" → "01" → "RDY") and
+				 * the tank body blinks in-world during the wait. */
+				this->shootCoolDownTimeLeft = 24;
 				new Entities::Bullet(this->controller, movementDir, this->position);
 				if (g_Game.isOnlineMode)
 				{
@@ -157,6 +168,11 @@ namespace Entities
 				// We have used the pickup
 				this->hasPickup = Messages::Pickup::PickupType::None;
 			}
+
+			/* Latch this frame's A state for next frame's rising-edge
+			 * detection. Done at the END of HandleActions so all uses
+			 * above see the previous frame's value. */
+			this->prevAPressed = aPressedNow;
 		}
 
 		/** @brief Handle player movement
@@ -235,16 +251,17 @@ namespace Entities
 				if (rawX > DEADZONE || rawX < -DEADZONE ||
 				    rawY > DEADZONE || rawY < -DEADZONE)
 				{
-					/* Both X and Y axes are inverted relative to the world's
-					 * world-coord-to-screen mapping in this engine (camera
-					 * + jo_3d_rotate_matrix_rad_x(0.5) + translate(-10,-10,0)
-					 * combine such that world +X maps to screen LEFT and
-					 * world +Y maps to screen DOWN). Negate both raw stick
-					 * values so pushing the stick UP/LEFT results in
-					 * tank movement screen-UP/screen-LEFT respectively. */
+					/* X is inverted relative to screen (world +X → screen LEFT
+					 * because of the engine's camera + rotate_x(0.5) +
+					 * translate(-10,-10,0) chain) so we negate rawX.
+					 * Y on the Saturn analog stick is already 0=top/255=bot,
+					 * matching world +Y = screen DOWN — so DON'T negate
+					 * rawY. The previous build negated it (matching the
+					 * inverted D-pad branch convention) which made stick
+					 * UP move the tank screen-DOWN; user-confirmed bug. */
 					const Fxp INV_127 = Fxp(1.0 / 127.0);
 					inX = -Fxp::FromInt(rawX) * INV_127;
-					inY = -Fxp::FromInt(rawY) * INV_127;
+					inY =  Fxp::FromInt(rawY) * INV_127;
 					analogActive = true;
 				}
 				if (!analogActive)

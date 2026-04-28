@@ -294,14 +294,23 @@ static void draw_z_overlay(const unet_state_data_t* nd)
         }
         font_draw("* = WINNER", FONT_X(1), FONT_Y(16), 500);
     } else {
-        /* Leaderboard page — clearer column headers. */
+        /* Leaderboard page. NBG0 grid is 40 cols × 28 rows (320×224 PAL,
+         * 8px cells); font.c silently drops draws with col < 0 or > 39,
+         * so the format MUST stay ≤ 40 chars wide and start at FONT_X(0).
+         * Previous "...WINS BEST HP KILLS DEATHS MATCHES" header was 57
+         * chars from FONT_X(-6) — both off-screen — which is why the
+         * page rendered as a blank under the title. */
         font_draw_centered("ONLINE LEADERBOARD", FONT_Y(6), 500);
         if (nd->leaderboard_count > 0) {
-            font_draw("#  NAME             WINS  BEST HP  KILLS  DEATHS  MATCHES",
-                      FONT_X(-6), FONT_Y(9), 500);
+            /* Header (37 chars):
+             *   "#  NAME             W  HP   K   D  GP" */
+            font_draw("#  NAME             W  HP  K  D   GP",
+                      FONT_X(2), FONT_Y(9), 500);
             for (i = 0; i < nd->leaderboard_count && i < 10; i++) {
-                font_printf(FONT_X(-6), FONT_Y(10 + i), 500,
-                            "%-2d %-16s %4d  %7d  %5d  %6d  %7d",
+                /* Per-row format (37 chars):
+                 *   "<2d> <16s> <3d> <3d> <2d> <2d> <3d>" */
+                font_printf(FONT_X(2), FONT_Y(10 + i), 500,
+                            "%-2d %-16s %3d %3d %2d %2d %3d",
                             i + 1,
                             nd->leaderboard[i].name,
                             nd->leaderboard[i].wins,

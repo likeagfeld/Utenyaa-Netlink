@@ -6,6 +6,7 @@
 #include "Debug.hpp"
 #include "Message.hpp"
 #include "Settings.hpp"
+#include "../net/utenyaa_game.h"   /* g_Game for online-mode gating */
 
 namespace UI
 {
@@ -148,7 +149,16 @@ namespace UI
 
             if (auto* timeUpdate = message.TryCast<Messages::UpdateTime>())
             {
-                jo_printf(18, 0, "%01d:%02d", timeUpdate->currentTime / 60, timeUpdate->currentTime % 60);
+                /* In online mode the canonical match timer is rendered
+                 * by OnlineBridge::DrawGameplayOverlay (centered at row 1,
+                 * server-authoritative). Skip the offline HUD position
+                 * (cell 18,0) so we don't have two writers fighting
+                 * mid-frame for adjacent cells, which the user reported
+                 * as a strobing/overlap on the in-game timer. */
+                if (!g_Game.isOnlineMode)
+                {
+                    jo_printf(18, 0, "%01d:%02d", timeUpdate->currentTime / 60, timeUpdate->currentTime % 60);
+                }
             }
             Draw();
         }
