@@ -4,6 +4,14 @@ First alpha release of online multiplayer support for Utenyaa via the Sega Satur
 
 💝 **Massive thanks to [ReyeMe](https://github.com/ReyeMe) and [robertoduarte](https://github.com/robertoduarte)** for the original Utenyaa game — the engine, the tank arena, the art, the catgirls. This fork only *adds* a networking layer; everything you're actually playing is their work. Give the upstream a star: https://github.com/ReyeMe/Utenyaa-public
 
+## Online setup
+
+No manual config editing needed. Update to the **latest DreamPi** or **latest netlink.py PC tunnel script** — the Utenyaa entry is already shipped in the default `netlink_config.ini` alongside the other NetLink revival games. The server is already live and running; just dial in from the Saturn and the bridge takes care of the rest.
+
+## How to play
+
+Load `START GAME.CUE` (not `game.iso`) on your emulator or ODE. The cue references both the game ISO track and the three CD audio tracks (title / pause / gameplay).
+
 ## What's in this alpha
 
 The online flow has been kept deliberately minimal so the underlying protocol and engine can be hardened first; some upstream lobby features (stage voting, character picker, bots) were stripped while we stabilise the LOBBY → GAMEPLAY transition. The sections below describe **only what's actually in the alpha 0.1 build** — not future plans.
