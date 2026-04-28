@@ -24,6 +24,7 @@ namespace UI
             size_t index;
             int32_t health;
             size_t powerupType;
+            int32_t cooldownFrames;   /* shoot cooldown frames remaining; 0 = ready */
         };
 
         struct UpdateTime : MessageType<UpdateTime>
@@ -120,15 +121,29 @@ namespace UI
     {
         inline static int headLocations[4][2] = { { 10, 3 }, { 270, 3 }, { 3, 48 }, { 278, 48 } };
 
+        /* Cooldown text cells per player. Coordinates are 8-pixel
+         * character cells (40 wide × 28 tall on 320×224 PAL).
+         *
+         *   P0 head occupies col 1-5 row 0-4, hearts col 6-9 row 0-2,
+         *      powerup col 6-8 row 2-3. Free below at row 5.
+         *   P1 mirror on right: head col 33-37, hearts col 30-32, powerup
+         *      col 32. Free below at row 5.
+         *   P2/P3: same layout shifted down to row 6-10. Free at row 11.
+         *
+         * 3 chars wide ("RDY" / "%02d ") so it overwrites in place. */
+        inline static int cooldownCell[4][2] = { { 1, 5 }, { 33, 5 }, { 1, 11 }, { 33, 11 } };
+
         int32_t playerHealth[4] = { 6, 6, 6, 6 };
         size_t powerupType[4] = { 0, 0, 0, 0 };
+        int32_t cooldownFrames[4] = { -1, -1, -1, -1 };  /* -1 = remote/unknown (no render), 0 = RDY, >0 = cooling */
 
         void HandleMessages(const Message& message)
         {
             if (auto* playerUpdate = message.TryCast<Messages::UpdatePlayer>())
             {
-                playerHealth[playerUpdate->index] = playerUpdate->health;
-                powerupType[playerUpdate->index] = playerUpdate->powerupType;
+                playerHealth[playerUpdate->index]   = playerUpdate->health;
+                powerupType[playerUpdate->index]    = playerUpdate->powerupType;
+                cooldownFrames[playerUpdate->index] = playerUpdate->cooldownFrames;
             }
 
             if (auto* timeUpdate = message.TryCast<Messages::UpdateTime>())
@@ -193,6 +208,21 @@ namespace UI
 				}
 
 				jo_sprite_draw3D2(3 + (player * 4) + offset, headLocations[player][X], headLocations[player][Y], 50);
+
+				/* Cooldown indicator. -1 means we don't have data for this
+				 * slot (remote online players — we don't see their reload
+				 * timer). Render fixed-width 4 chars so the prior frame's
+				 * digits/RDY text gets fully overwritten in place — no
+				 * jo_clear_screen needed and no leftover artifacts. */
+				if (cooldownFrames[player] >= 0)
+				{
+					int col = cooldownCell[player][0];
+					int row = cooldownCell[player][1];
+					if (cooldownFrames[player] > 0)
+						jo_printf(col, row, "%02d ", cooldownFrames[player]);
+					else
+						jo_printf(col, row, "RDY");
+				}
 			}
         }
 

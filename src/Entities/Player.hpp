@@ -115,7 +115,11 @@ namespace Entities
 				this->shootCoolDownTimeLeft == 0)
 			{
 				PoneSound::Sound::Play(1, PoneSound::PlayMode::Semi, 5);
-				this->shootCoolDownTimeLeft = 0x1b;
+				/* 18 frames @ 50 Hz PAL = 360 ms; @ 25 Hz under load = 720 ms.
+				 * Down from upstream's 27 (540/1080 ms) — felt sluggish.
+				 * The HUD shows the live countdown ("18" → "01" → "RDY")
+				 * and the tank body blinks in-world during the wait. */
+				this->shootCoolDownTimeLeft = 18;
 				new Entities::Bullet(this->controller, movementDir, this->position);
 				if (g_Game.isOnlineMode)
 				{
@@ -588,6 +592,11 @@ namespace Entities
 			playerUpdate.health = this->health;
 			playerUpdate.index = controller;
 			playerUpdate.powerupType = (int)this->hasPickup;
+			/* In online mode we never see the remote player's reload
+			 * timer (only their position via PLAYER_SYNC) — flag with
+			 * -1 so the HUD skips rendering "RDY" misleadingly. Local
+			 * P1 and local P2 (co-op) get the real countdown. */
+			playerUpdate.cooldownFrames = isRemoteOnline ? -1 : (int)this->shootCoolDownTimeLeft;
 
 			UI::HudHandler.HandleMessages(playerUpdate);
 		}
@@ -601,9 +610,20 @@ namespace Entities
 			jo_3d_translate_matrix_fixed(this->position.x.Value(), this->position.y.Value(), (this->position.z + 1.0).Value());
 			slRotZ(Trigonometry::RadiansToSgl(this->angle));
 
-			this->model->Draw(1);
+			/* Body blink during cooldown: skip the body draw on every
+			 * 2nd 4-frame block so the tank visibly strobes "I can't
+			 * fire". Even-numbered 4-frame groups draw, odd skip —
+			 * gives ~6 Hz blink @ 50 Hz PAL, visible but not strobe-y.
+			 * shootCoolDownTimeLeft == 0 always draws (ready state). */
+			if (this->shootCoolDownTimeLeft == 0 ||
+				(this->shootCoolDownTimeLeft & 0x04) == 0)
+			{
+				this->model->Draw(1);
+			}
 
-			if (this->shootCoolDownTimeLeft > 0x10)
+			/* Muzzle flash overlay — keep existing brief flash on the
+			 * first ~2 frames after firing (cooldown 17–18 of 18). */
+			if (this->shootCoolDownTimeLeft > 16)
 			{
 				this->model->Draw(0);
 			}
