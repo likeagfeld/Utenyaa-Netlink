@@ -212,7 +212,9 @@ static void on_lobby_state(const uint8_t* p, int len)
     int off, i, consumed, k;
     if (len < 2) return;
     g_net.lobby_count = p[1];
-    if (g_net.lobby_count > UNET_MAX_PLAYERS) g_net.lobby_count = UNET_MAX_PLAYERS;
+    /* Lobby can hold up to UNET_MAX_LOBBY (8) — only first 4 ready
+     * get into the next match, but all 8 are tracked here. */
+    if (g_net.lobby_count > UNET_MAX_LOBBY) g_net.lobby_count = UNET_MAX_LOBBY;
     off = 2;
     for (i = 0; i < g_net.lobby_count && off < len; i++) {
         g_net.lobby_players[i].id = p[off++];
@@ -225,7 +227,7 @@ static void on_lobby_state(const uint8_t* p, int len)
         g_net.lobby_players[i].stage_vote   = (off < len) ? p[off++] : 0xFF;
         g_net.lobby_players[i].active = true;
     }
-    for (; i < UNET_MAX_PLAYERS; i++) g_net.lobby_players[i].active = false;
+    for (; i < UNET_MAX_LOBBY; i++) g_net.lobby_players[i].active = false;
 
     for (k = 0; k < g_net.lobby_count; k++) {
         if (g_net.lobby_players[k].id == g_net.my_player_id) {

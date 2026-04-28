@@ -64,7 +64,8 @@ AUTH_MAGIC = b"AUTH"
 AUTH_OK = 0x01
 AUTH_TIMEOUT = 5.0
 
-MAX_PLAYERS = 4
+MAX_PLAYERS = 4         # max in-match player count (game_players cap)
+MAX_LOBBY   = 8         # max lobby connections (first 4 to ready play next match)
 MAX_CHARACTERS = 12
 MAX_CRATES = 16
 STAGE_COUNT = 4
@@ -208,7 +209,9 @@ def build_username_taken() -> bytes:
 
 
 def build_lobby_state(players: list) -> bytes:
-    count = min(len(players), MAX_PLAYERS)
+    # Lobby can hold MAX_LOBBY entries — broadcast all, not just
+    # in-game-eligible MAX_PLAYERS.
+    count = min(len(players), MAX_LOBBY)
     payload = bytes([UNET_LOBBY_STATE, count])
     for p in players[:count]:
         payload += struct.pack("B", p["id"])
@@ -646,6 +649,11 @@ class ClientInfo:
         self.last_activity = time.time()
         # Lobby
         self.ready = False
+        # Monotonic timestamp of the toggle that turned ready True.
+        # Reset to 0.0 when ready is toggled False or match ends.
+        # Used by _on_start_game_req to pick "first 4 ready" when the
+        # lobby holds more than MAX_PLAYERS connections.
+        self.ready_at = 0.0
         self.character_id = 0xFF
         self.stage_vote = 0xFF
         self.stage_loaded = False
@@ -832,7 +840,9 @@ class UtenyaaServer:
                 "character_id": bot.character_id,
                 "stage_vote": bot.stage_vote
             })
-        return out[:MAX_PLAYERS]
+        # Cap at lobby size — lobby holds up to MAX_LOBBY connections
+        # (each plus any P2 co-op slots), not just MAX_PLAYERS.
+        return out[:MAX_LOBBY]
 
     def _stage_tally(self) -> list:
         tally = [0] * STAGE_COUNT
@@ -864,6 +874,9 @@ class UtenyaaServer:
 
     def _on_ready(self, c: ClientInfo):
         c.ready = not c.ready
+        # Stamp the time of the True-toggle so _start_game can pick
+        # the FIRST MAX_PLAYERS to ready when more than 4 are armed.
+        c.ready_at = time.monotonic() if c.ready else 0.0
         self._broadcast_lobby()
 
     def _on_character_select(self, c: ClientInfo, char_id: int):
@@ -911,19 +924,38 @@ class UtenyaaServer:
         if self.match is not None:
             log.info("START_GAME_REQ from %s rejected: match already active", c.username)
             return
-        ready_humans = [cc for cc in self.clients.values()
-                        if cc.authenticated and cc.ready]
-        # Count slots: ready humans + each ready human's registered
-        # co-op names + bots. Pre-match local_pids is empty so we use
-        # local_names instead (fixed: previously used local_pids).
-        total_slots = len(ready_humans) + len(self.bots)
-        for cc in ready_humans:
-            total_slots += len(cc.local_names)
-        log.info("START_GAME_REQ from %s: ready_humans=%d bots=%d "
-                 "p2_names=%d total_slots=%d (need %d)",
-                 c.username, len(ready_humans), len(self.bots),
+
+        # ALL ready humans, sorted by the timestamp they toggled ready
+        # (oldest first). When the lobby holds more than MAX_PLAYERS
+        # connections, only the first 4 ready (and their P2 co-op
+        # slots, fitting within MAX_PLAYERS total) are admitted to
+        # the match — the rest stay ready-armed in the lobby and get
+        # auto-picked next round if still ready.
+        all_ready = sorted(
+            [cc for cc in self.clients.values()
+             if cc.authenticated and cc.ready],
+            key=lambda cc: cc.ready_at)
+
+        # Greedy fill: walk in ready_at order, admit each player + its
+        # P2 names if there's room left in MAX_PLAYERS. Skip a player
+        # whose addition would overflow (a future ready toggle picks
+        # them up).
+        slots_used = len(self.bots)
+        ready_humans = []
+        for cc in all_ready:
+            need = 1 + len(cc.local_names)
+            if slots_used + need > MAX_PLAYERS:
+                continue
+            ready_humans.append(cc)
+            slots_used += need
+
+        total_slots = slots_used
+        log.info("START_GAME_REQ from %s: ready_humans=%d/%d_armed bots=%d "
+                 "p2_names=%d total_slots=%d (need %d, max %d)",
+                 c.username, len(ready_humans), len(all_ready),
+                 len(self.bots),
                  sum(len(cc.local_names) for cc in ready_humans),
-                 total_slots, MIN_TO_START)
+                 total_slots, MIN_TO_START, MAX_PLAYERS)
         if total_slots < MIN_TO_START:
             c.send_raw(build_log(f"Need {MIN_TO_START} players to start"))
             log.info("START_GAME_REQ rejected: insufficient slots")
@@ -1016,10 +1048,12 @@ class UtenyaaServer:
                   for pid, p in self.game_players.items()}
         self._broadcast(build_game_over(best_pid, sudden, scores))
 
-        # Reset for next match
+        # Reset for next match — clear ready (forces fresh A press
+        # in lobby; first 4 to re-arm play next round).
         for c in self.clients.values():
             c.in_game = False
             c.ready = False
+            c.ready_at = 0.0
             c.stage_loaded = False
         self.game_players.clear()
         self.match = None
@@ -1521,6 +1555,18 @@ class UtenyaaServer:
                         try:
                             cs, addr = self.server_socket.accept()
                             cs.setblocking(False)
+                            # Lobby capacity: hard-cap at MAX_LOBBY (8).
+                            # Authenticated clients count as a slot;
+                            # pre-auth pending sockets also count so a
+                            # flood can't squeeze past the cap. The
+                            # rejected client gets a TCP RST when we
+                            # close their socket.
+                            if len(self.clients) >= MAX_LOBBY:
+                                log.info("Lobby full (%d/%d) — rejecting %s",
+                                         len(self.clients), MAX_LOBBY, addr)
+                                try: cs.close()
+                                except OSError: pass
+                                continue
                             ci = ClientInfo(cs, addr)
                             # Temporary uid key = address until auth (negative id)
                             self.clients[-id(ci)] = ci

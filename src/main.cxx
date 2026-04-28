@@ -139,6 +139,34 @@ int main()
 		// ticking every frame regardless.
 		unet_glue_tick_frame();
 
+		// Online match ended — TickMatchEndPause flipped gameState to
+		// LOBBY. THIS BLOCK MUST RUN BEFORE the `continue` below: once
+		// gameState is LOBBY, unet_glue_is_online_screen_active()
+		// returns true and the rest of the loop is skipped — any
+		// post-match teardown / ready-state reset placed below the
+		// continue NEVER FIRES. That was the actual root cause of the
+		// "press A+START after 1st game removes ready status" bug:
+		// stale Settings::IsActive=true + stale g_net.my_ready=true
+		// from the previous match.
+		if (g_Game.isOnlineMode && g_Game.gameState == UGAME_STATE_LOBBY
+			&& Settings::IsActive)
+		{
+			Settings::IsActive = false;
+			Settings::GameEnded = false;
+			if (worldPtr)
+			{
+				for (auto* object : IRenderable::objects) delete object;
+				worldPtr = nullptr;
+			}
+			PoneSound::CD::Play(2, 2, true);
+			unet_reset_ready_state();
+			g_Game.input.pressedABC = false;
+			g_Game.input.pressedStart = false;
+			g_Game.input.pressedLT = false;
+			g_Game.input.pressedRT = false;
+			jo_clear_screen();
+		}
+
 		if (unet_glue_is_online_screen_active())
 		{
 			// The offline title/menu path leaves the NBG1 logo layer
@@ -178,33 +206,7 @@ int main()
 			Settings::GameEnded = false;
 		}
 
-		// Online match ended — TickMatchEndPause flipped gameState to LOBBY.
-		// Tear down the active world so main re-enters the online screen
-		// dispatch path (lobby_draw) on the next iteration.
-		if (g_Game.isOnlineMode && g_Game.gameState == UGAME_STATE_LOBBY
-			&& Settings::IsActive)
-		{
-			Settings::IsActive = false;
-			Settings::GameEnded = false;
-			if (worldPtr)
-			{
-				for (auto* object : IRenderable::objects) delete object;
-				worldPtr = nullptr;
-			}
-			PoneSound::CD::Play(2, 2, true);
-			/* Mirror server-side post-match resets so the next lobby
-			 * session starts clean. Server _end_match resets c.ready=
-			 * False; without these, stale my_ready / pressedABC /
-			 * pressedStart cause the next A+START sequence to fire a
-			 * redundant READY toggle that flips the player back to
-			 * NOT ready (user-reported 2nd-game lobby bug). */
-			unet_reset_ready_state();
-			g_Game.input.pressedABC = false;
-			g_Game.input.pressedStart = false;
-			g_Game.input.pressedLT = false;
-			g_Game.input.pressedRT = false;
-			jo_clear_screen();
-		}
+		// (match-end teardown moved above the continue — see top of loop)
 
 		// Online lobby transitioned us into gameplay — sync Settings so
 		// the existing offline code path spins up World correctly, and

@@ -330,7 +330,8 @@ void lobby_draw(void)
 
     font_draw_centered("UTENYAA LOBBY", FONT_Y(2), 500);
     font_printf(FONT_X(1), FONT_Y(4), 500,
-                "PLAYERS: %d/%d", nd->lobby_count, UNET_MAX_PLAYERS);
+                "PLAYERS: %d/%d (first 4 ready play next match)",
+                nd->lobby_count, UNET_MAX_LOBBY);
 
     /* Persistent WINNER banner — shows after a match ends, stays
      * until the next match begins (on_game_start clears
@@ -369,7 +370,7 @@ void lobby_draw(void)
      * containing 'P2: ' / '2: ' bytes that recurred as the literal
      * value of the recurring jo_free 'Bad pointer 0x..323A20' crash. */
     font_draw("#  NAME             STATUS", FONT_X(1), FONT_Y(6), 500);
-    for (i = 0; i < UNET_MAX_PLAYERS; i++) {
+    for (i = 0; i < UNET_MAX_LOBBY; i++) {
         if (i < nd->lobby_count && nd->lobby_players[i].active) {
             const unet_lobby_player_t* lp = &nd->lobby_players[i];
             char marker = (lp->id == g_Game.myPlayerID) ? '>' : ' ';
@@ -405,6 +406,8 @@ void lobby_draw(void)
     /* Controls hint */
     font_draw("A:READY  START:GO  Y:DISCONNECT",
               FONT_X(1), FONT_Y(25), 500);
+    font_draw("HOLD Z FOR LEADERBOARD",
+              FONT_X(1), FONT_Y(26), 500);
 
     /* Disconnect-confirmation overlay removed in simplified mode —
      * B now leaves lobby immediately (see lobby_input). */

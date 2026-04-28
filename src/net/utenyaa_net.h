@@ -142,7 +142,10 @@ typedef struct {
     char my_name2[UNET_MAX_NAME + 1];
 
     /* Lobby */
-    unet_lobby_player_t lobby_players[UNET_MAX_PLAYERS];
+    /* Lobby holds up to UNET_MAX_LOBBY (8) connections; only the
+     * first UNET_MAX_PLAYERS (4) by ready_at timestamp are picked
+     * for the next match. Rest wait. */
+    unet_lobby_player_t lobby_players[UNET_MAX_LOBBY];
     int  lobby_count;
     bool my_ready;
     uint8_t my_character;

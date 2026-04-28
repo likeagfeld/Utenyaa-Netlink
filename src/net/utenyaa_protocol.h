@@ -119,7 +119,8 @@ extern "C" {
  * Limits & Buffer Sizes
  *============================================================================*/
 
-#define UNET_MAX_PLAYERS        4
+#define UNET_MAX_PLAYERS        4    /* in-match player cap (game_players, remote_players, score arrays) */
+#define UNET_MAX_LOBBY          8    /* lobby connection cap — first 4 ready (by toggle time) get to play next match, rest wait */
 #define UNET_MAX_CHARACTERS    12  /* available skins; uniqueness enforced */
 #define UNET_MAX_NAME_LEN      16
 #define UNET_MAX_CRATES        16  /* per stage */
