@@ -432,29 +432,149 @@ void OnlineBridge::TickLocalPlayers()
  * Apply server PLAYER_SYNC snapshots to remote C++ Players each frame
  *============================================================================*/
 
+/* Pull a snapshot pair from the ring buffer that brackets the target
+ * "render time" (g_net.local_frame - UNET_INTERP_LAG_FRAMES) and lerp
+ * between them. Replaces the prior single-snapshot lerp+extrapolate
+ * which warped under jitter. Returns true if a usable bracketing pair
+ * was found; false means we have nothing or only one sample (caller
+ * should fall back to the newest snapshot directly).
+ *
+ * Tier policy on raw delta between successive snapshots:
+ *    Δ < 1 unit          : hold (noise floor)
+ *    Δ ≤ 8 units         : lerp normally (smooth catch-up)
+ *    Δ ≤ 32 units        : lerp normally (visible but acceptable)
+ *    Δ > 32 units        : SNAP to newest (warp recovery / desync) */
+static bool fetch_interp_pose(const unet_snap_ring_t* ring,
+                              uint16_t target_frame,
+                              Vec3* out_pos, Vec3* out_vel, Fxp* out_angle,
+                              int16_t* out_health)
+{
+    if (ring->count == 0) return false;
+
+    /* Walk newest→oldest, find the first entry whose arrived_frame is
+     * <= target_frame. The entry above that one is the "newer" bracket. */
+    int idx_new = -1, idx_old = -1;
+    for (int i = 0; i < ring->count; i++) {
+        int slot = (ring->head - i + UNET_SNAP_HISTORY) % UNET_SNAP_HISTORY;
+        const unet_player_sync_t* e = &ring->entries[slot];
+        /* Compare with wrap tolerance using signed delta. */
+        int16_t delta = (int16_t)(target_frame - e->arrived_frame);
+        if (delta >= 0) {
+            idx_old = slot;
+            if (i > 0)
+                idx_new = (ring->head - (i - 1) + UNET_SNAP_HISTORY) % UNET_SNAP_HISTORY;
+            break;
+        }
+    }
+
+    /* No old enough sample (interpolation lag still warming up) — caller
+     * uses the eldest available snapshot as a safe fallback. */
+    if (idx_old < 0) {
+        int slot = (ring->head - (ring->count - 1) + UNET_SNAP_HISTORY) % UNET_SNAP_HISTORY;
+        const unet_player_sync_t* e = &ring->entries[slot];
+        *out_pos = fxp_vec(e->x, e->y, e->z);
+        *out_vel = fxp_vec(e->dx, e->dy, e->dz);
+        *out_angle = Fxp::BuildRaw((int32_t)e->angle << 8);
+        *out_health = (int16_t)e->health;
+        return true;
+    }
+
+    const unet_player_sync_t* eo = &ring->entries[idx_old];
+
+    /* No newer bracket — target is beyond newest snapshot. Use newest
+     * as-is (no extrapolation; the buffer's interp lag should normally
+     * keep target in-bounds). */
+    if (idx_new < 0) {
+        *out_pos = fxp_vec(eo->x, eo->y, eo->z);
+        *out_vel = fxp_vec(eo->dx, eo->dy, eo->dz);
+        *out_angle = Fxp::BuildRaw((int32_t)eo->angle << 8);
+        *out_health = (int16_t)eo->health;
+        return true;
+    }
+
+    const unet_player_sync_t* en = &ring->entries[idx_new];
+
+    /* Snap-tier check: if positional Δ between bracketing snapshots is
+     * huge (>32 world units, ≈ a respawn or desync recovery), skip lerp
+     * and jump to newest. Avoids visible "stretching" across teleports. */
+    int32_t dxx = en->x - eo->x;
+    int32_t dyy = en->y - eo->y;
+    /* >> 16 to integer world units for the threshold compare. */
+    int32_t dxw = dxx >> 16; if (dxw < 0) dxw = -dxw;
+    int32_t dyw = dyy >> 16; if (dyw < 0) dyw = -dyw;
+    if (dxw > 32 || dyw > 32) {
+        *out_pos = fxp_vec(en->x, en->y, en->z);
+        *out_vel = fxp_vec(en->dx, en->dy, en->dz);
+        *out_angle = Fxp::BuildRaw((int32_t)en->angle << 8);
+        *out_health = (int16_t)en->health;
+        return true;
+    }
+
+    /* Lerp. Compute fraction t = (target - old) / (new - old) in fixed
+     * arithmetic. frame counts are uint16; subtract with wrap tolerance. */
+    int32_t span    = (int16_t)(en->arrived_frame - eo->arrived_frame);
+    int32_t elapsed = (int16_t)(target_frame    - eo->arrived_frame);
+    if (span <= 0) {
+        /* Degenerate (same-frame snapshots) — use newer. */
+        *out_pos = fxp_vec(en->x, en->y, en->z);
+        *out_vel = fxp_vec(en->dx, en->dy, en->dz);
+        *out_angle = Fxp::BuildRaw((int32_t)en->angle << 8);
+        *out_health = (int16_t)en->health;
+        return true;
+    }
+    if (elapsed < 0)      elapsed = 0;
+    else if (elapsed > span) elapsed = span;
+    /* t in 16.16 fxp: (elapsed/span) * 65536 */
+    int32_t t_fxp = (int32_t)((((int64_t)elapsed) << 16) / (int64_t)span);
+
+    /* Linear interpolation on fxp 16.16 raw values. */
+    int32_t lx = eo->x + (int32_t)(((int64_t)(en->x - eo->x) * t_fxp) >> 16);
+    int32_t ly = eo->y + (int32_t)(((int64_t)(en->y - eo->y) * t_fxp) >> 16);
+    int32_t lz = eo->z + (int32_t)(((int64_t)(en->z - eo->z) * t_fxp) >> 16);
+    /* Velocity uses newer snapshot directly (it's an instantaneous reading). */
+    *out_pos = fxp_vec(lx, ly, lz);
+    *out_vel = fxp_vec(en->dx, en->dy, en->dz);
+    /* Angle: shortest-path lerp avoiding 0/2π wrap (work in u16 angle space). */
+    int32_t a_old = (uint16_t)eo->angle;
+    int32_t a_new = (uint16_t)en->angle;
+    int32_t a_diff = a_new - a_old;
+    if (a_diff >  32768) a_diff -= 65536;
+    if (a_diff < -32768) a_diff += 65536;
+    int32_t a_lerp = (a_old + ((a_diff * t_fxp) >> 16)) & 0xFFFF;
+    *out_angle = Fxp::BuildRaw((int32_t)a_lerp << 8);
+    *out_health = (int16_t)en->health;
+    return true;
+}
+
 void OnlineBridge::ApplyRemoteSnapshots()
 {
     if (!g_Game.isOnlineMode) return;
     if (g_Game.gameState != UGAME_STATE_GAMEPLAY) return;
 
     const unet_state_data_t* nd = unet_get_data();
+    /* Render time = "now - interp lag". The lag (5 frames ≈ 100 ms @
+     * 50fps PAL) is enough to keep us safely between two arrived
+     * snapshots even on a 14.4k Japanese modem with 80–120 ms one-way
+     * latency, while still feeling responsive. */
+    uint16_t target_frame = (uint16_t)(nd->local_frame - UNET_INTERP_LAG_FRAMES);
+
     for (uint8_t pid = 0; pid < UNET_MAX_PLAYERS; pid++)
     {
         if (pid == g_Game.myPlayerID) continue;
         if (g_Game.hasSecondLocal && pid == g_Game.myPlayerID2) continue;
-        if (!nd->remote_players[pid].valid) continue;
+        if (nd->snap_ring[pid].count == 0) continue;
 
         Entities::Player* p = find_player_by_pid(pid);
         if (!p) continue;
 
-        Vec3 pos = fxp_vec(nd->remote_players[pid].x,
-                           nd->remote_players[pid].y,
-                           nd->remote_players[pid].z);
-        Vec3 vel = fxp_vec(nd->remote_players[pid].dx,
-                           nd->remote_players[pid].dy,
-                           nd->remote_players[pid].dz);
-        Fxp angle = Fxp::BuildRaw((int32_t)nd->remote_players[pid].angle << 8);
-        p->ApplyNetworkSnapshot(pos, vel, angle, (int16_t)nd->remote_players[pid].health);
+        Vec3 pos, vel;
+        Fxp angle;
+        int16_t health;
+        if (fetch_interp_pose(&nd->snap_ring[pid], target_frame,
+                              &pos, &vel, &angle, &health))
+        {
+            p->ApplyNetworkSnapshot(pos, vel, angle, health);
+        }
     }
 }
 

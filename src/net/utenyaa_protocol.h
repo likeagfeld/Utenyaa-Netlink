@@ -80,7 +80,38 @@ extern "C" {
 #define UNET_MSG_LOG               0xA6  /* [len:1][text:N] */
 #define UNET_MSG_PAUSE_ACK         0xA7  /* [paused:1] */
 #define UNET_MSG_MATCH_TIMER       0xA8  /* [seconds_remaining:2 BE] broadcast periodically */
-#define UNET_MSG_PLAYER_SYNC       0xA9  /* [player_id:1][x:4][y:4][z:4][dx:4][dy:4][dz:4][angle:2][health:1][pickup:1] */
+/* PLAYER_SYNC v2 (12 bytes total, was 30) — quantized snapshot.
+ * Wire layout:
+ *   [op:1=0xA9][pid:1][x_q:i16 BE][y_q:i16 BE]
+ *   [z_q:i8][dx_q:i8][dy_q:i8][dz_q:i8]
+ *   [angle_q:u8][hp_pickup:u8]
+ * Quantization (chosen to fit 14.4k modems with 4P × 20Hz broadcast):
+ *   x,y: fxp 16.16 raw value >> 9  (int16: ±256 world units, 1/128
+ *        precision = 0.0078 world-unit resolution)
+ *   z:   fxp 16.16 raw >> 16        (int8: ±127 integer world units)
+ *   dx,dy,dz: fxp 16.16 raw >> 10   (int8: ±2 units/frame velocity)
+ *   angle: SGL u16 angle >> 8       (u8: 256 levels = 1.4° resolution)
+ *   hp_pickup: hp in low 4 bits, pickup in high 4 bits
+ * The arena (Map::MapDimensionSize=20 tiles × 8 units/tile = 160 units)
+ * fits comfortably in the int16 signed range. */
+#define UNET_MSG_PLAYER_SYNC       0xA9
+#define UNET_PLAYER_SYNC_BYTES     12
+
+/* Quantization helpers — used on both client and server (the server is
+ * Python and replicates these arithmetics; comments tell the Python side
+ * what to do). Values are SH-2 inline-friendly: pure shift, no divide. */
+
+static inline int16_t unet_q_pos(int32_t fxp) { return (int16_t)(fxp >> 9); }
+static inline int32_t unet_d_pos(int16_t q)   { return ((int32_t)q) << 9; }
+
+static inline int8_t  unet_q_z(int32_t fxp)   { return (int8_t)(fxp >> 16); }
+static inline int32_t unet_d_z(int8_t q)      { return ((int32_t)q) << 16; }
+
+static inline int8_t  unet_q_vel(int32_t fxp) { return (int8_t)(fxp >> 10); }
+static inline int32_t unet_d_vel(int8_t q)    { return ((int32_t)q) << 10; }
+
+static inline uint8_t unet_q_angle(int16_t a) { return (uint8_t)((uint16_t)a >> 8); }
+static inline int16_t unet_d_angle(uint8_t q) { return (int16_t)(((uint16_t)q) << 8); }
 #define UNET_MSG_BULLET_SPAWN      0xAA  /* [entity_id:2 BE][origin_pid:1][x:4][y:4][z:4][dx:4][dy:4][dz:4] */
 #define UNET_MSG_MINE_SPAWN        0xAB  /* [entity_id:2 BE][origin_pid:1][x:4][y:4][z:4] */
 #define UNET_MSG_BOMB_SPAWN        0xAC  /* [entity_id:2 BE][origin_pid:1][x:4][y:4][z:4][dx:4][dy:4][dz:4] */

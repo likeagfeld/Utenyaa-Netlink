@@ -507,7 +507,16 @@ namespace Entities
 			// snapshot is 2-3 frames stale compared to the shooter.
 			if (g_Game.isOnlineMode)
 			{
-				Fxp paddedSize = Player::Size + Fxp::FromInt(3);
+				/* Online: bullet collision against remote tanks needs a
+				 * padded hitbox because the rendered position is 100 ms
+				 * behind reality (UNET_INTERP_LAG_FRAMES). Pad +6 (was
+				 * +3): a tank moving at MovementSpeed=30 units/sec can
+				 * traverse ~3 units in the 100 ms window between two
+				 * snapshots, so the previous +3 was exactly the worst-
+				 * case displacement, leaving zero margin for bullet
+				 * travel time. +6 gives clean point-blank hits without
+				 * making far-distance shots feel hit-claimy. */
+				Fxp paddedSize = Player::Size + Fxp::FromInt(6);
 				*result = AABB(this->position, Vec3(paddedSize, paddedSize, paddedSize));
 			}
 			else
@@ -516,21 +525,21 @@ namespace Entities
 			}
 		}
 
-		/** @brief Apply a server-authoritative snapshot (remote players only).
-		 *  Called from OnlineBridge::ApplyRemoteSnapshots each frame after
-		 *  PLAYER_SYNC decode. Performs 50% lerp toward server position and
-		 *  +3-frame extrapolation along the server velocity to reduce
-		 *  visible jitter from network latency (Disasteroids pattern). */
+		/** @brief Apply an already-interpolated snapshot (remote players only).
+		 *  Called from OnlineBridge::ApplyRemoteSnapshots each frame.
+		 *  Under UNETv2 the bridge does the interpolation between bracketing
+		 *  PLAYER_SYNC snapshots before calling here, so serverPos IS the
+		 *  desired render position — no extra 50%-lerp / +3-frame extrap.
+		 *  Doubling the smoothing made remote tanks feel rubbery and
+		 *  arrive at server-truth always slightly late. Snap to serverPos.
+		 *  Velocity is kept on the entity for any consumers that read it. */
 		void ApplyNetworkSnapshot(const Vec3& serverPos, const Vec3& serverVel,
 								  const Fxp& serverAngle, int16_t serverHp)
 		{
-			// 50% lerp — halfway toward server pos.
-			Vec3 diff = serverPos - this->position;
-			this->position = this->position + (diff * Fxp(0.5));
-			// Extrapolate +3 frames along server velocity.
-			this->position = this->position + (serverVel * Fxp::FromInt(3));
-			this->angle = serverAngle;
-			this->health = serverHp;
+			this->position = serverPos;
+			this->angle    = serverAngle;
+			this->health   = serverHp;
+			(void)serverVel;
 		}
 
 		/** @brief Handle messages sent to this entity

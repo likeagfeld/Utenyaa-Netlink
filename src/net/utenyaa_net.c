@@ -43,7 +43,11 @@ static void clear_remote_inputs(void)
 static void clear_remote_players(void)
 {
     int i;
-    for (i = 0; i < UNET_MAX_PLAYERS; i++) g_net.remote_players[i].valid = false;
+    for (i = 0; i < UNET_MAX_PLAYERS; i++) {
+        g_net.remote_players[i].valid = false;
+        g_net.snap_ring[i].head = 0;
+        g_net.snap_ring[i].count = 0;
+    }
 }
 
 static void clear_crates(void)
@@ -302,21 +306,41 @@ static void on_game_start(const uint8_t* p, int len)
 static void on_player_sync(const uint8_t* p, int len)
 {
     uint8_t pid;
-    /* Payload: op(1) + pid(1) + 6×i32(24) + i16(2) + hp(1) + pickup(1) = 30 */
-    if (len < 30) return;
+    unet_player_sync_t snap;
+    unet_snap_ring_t* ring;
+    int next_head;
+    /* PLAYER_SYNC v2: op(1) + pid(1) + xq(2) + yq(2) + zq(1) + dxq(1)
+     * + dyq(1) + dzq(1) + angleq(1) + hp_pickup(1) = 12 bytes */
+    if (len < UNET_PLAYER_SYNC_BYTES) return;
     pid = p[1];
     if (pid >= UNET_MAX_PLAYERS) return;
-    g_net.remote_players[pid].x      = unet_r_i32(&p[2]);
-    g_net.remote_players[pid].y      = unet_r_i32(&p[6]);
-    g_net.remote_players[pid].z      = unet_r_i32(&p[10]);
-    g_net.remote_players[pid].dx     = unet_r_i32(&p[14]);
-    g_net.remote_players[pid].dy     = unet_r_i32(&p[18]);
-    g_net.remote_players[pid].dz     = unet_r_i32(&p[22]);
-    g_net.remote_players[pid].angle  = unet_r_i16(&p[26]);
-    g_net.remote_players[pid].health = p[28];
-    g_net.remote_players[pid].pickup = p[29];
-    g_net.remote_players[pid].last_update_frame = g_net.local_frame;
-    g_net.remote_players[pid].valid  = true;
+
+    /* Dequantize per the helpers in utenyaa_protocol.h */
+    snap.x      = unet_d_pos(unet_r_i16(&p[2]));
+    snap.y      = unet_d_pos(unet_r_i16(&p[4]));
+    snap.z      = unet_d_z((int8_t)p[6]);
+    snap.dx     = unet_d_vel((int8_t)p[7]);
+    snap.dy     = unet_d_vel((int8_t)p[8]);
+    snap.dz     = unet_d_vel((int8_t)p[9]);
+    snap.angle  = unet_d_angle(p[10]);
+    snap.health = (uint8_t)(p[11] & 0x0F);
+    snap.pickup = (uint8_t)((p[11] >> 4) & 0x0F);
+    snap.arrived_frame = g_net.local_frame;
+    snap.valid  = true;
+
+    /* Latest-snapshot view (back-compat for any reader that wants
+     * authoritative "now" values without interpolation, e.g. HUD HP). */
+    g_net.remote_players[pid] = snap;
+
+    /* Append to ring buffer for interpolated rendering. Newest at head,
+     * head wraps modulo UNET_SNAP_HISTORY. First insert lands at slot 0
+     * (NOT slot 1) so the buffer never holds a phantom zero entry that
+     * would compare as arrived_frame=0 in subsequent reader walks. */
+    ring = &g_net.snap_ring[pid];
+    next_head = (ring->count == 0) ? 0 : ((ring->head + 1) % UNET_SNAP_HISTORY);
+    ring->entries[next_head] = snap;
+    ring->head = next_head;
+    if (ring->count < UNET_SNAP_HISTORY) ring->count++;
 }
 
 static void on_input_relay(const uint8_t* p, int len)

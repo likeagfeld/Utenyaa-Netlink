@@ -250,13 +250,47 @@ def build_input_relay(pid: int, frame: int, input_bits: int) -> bytes:
     return encode_frame(payload)
 
 
+def _q_pos(fxp: int) -> int:
+    """Quantize fxp 16.16 position → int16 with shift 9 (fxp 7.9 in int16).
+       Range ±256 world units, 1/128-unit precision. Mirrors the C inline
+       `unet_q_pos` in utenyaa_protocol.h. Clamp to int16 to avoid pack
+       overflow on out-of-arena bots."""
+    q = fxp >> 9
+    if q > 32767:  q = 32767
+    if q < -32768: q = -32768
+    return q
+
+def _q_z(fxp: int) -> int:
+    """fxp 16.16 z → int8 (raw integer world unit, ±127)."""
+    q = fxp >> 16
+    if q > 127:  q = 127
+    if q < -128: q = -128
+    return q
+
+def _q_vel(fxp: int) -> int:
+    """fxp 16.16 per-frame velocity → int8 (shift 10, ±~2 units/frame)."""
+    q = fxp >> 10
+    if q > 127:  q = 127
+    if q < -128: q = -128
+    return q
+
+def _q_angle(a16: int) -> int:
+    """SGL u16 angle → high byte (256 levels = 1.4° resolution)."""
+    return (a16 & 0xFFFF) >> 8
+
 def build_player_sync(pid: int, x: int, y: int, z: int,
                       dx: int, dy: int, dz: int,
                       angle: int, hp: int, pickup: int) -> bytes:
+    """PLAYER_SYNC v2 — 12 bytes total (was 30 in v1).
+       Wire layout matches utenyaa_protocol.h's UNET_PLAYER_SYNC_BYTES."""
     payload = bytes([UNET_PLAYER_SYNC, pid & 0xFF])
-    payload += struct.pack("!iiiiii", x, y, z, dx, dy, dz)
-    payload += struct.pack("!h", _clamp16(angle))
-    payload += bytes([hp & 0xFF, pickup & 0xFF])
+    payload += struct.pack("!hh", _q_pos(x), _q_pos(y))
+    payload += struct.pack("!bbbb",
+                           _q_z(z),
+                           _q_vel(dx), _q_vel(dy), _q_vel(dz))
+    payload += struct.pack("!BB",
+                           _q_angle(angle),
+                           ((pickup & 0x0F) << 4) | (hp & 0x0F))
     return encode_frame(payload)
 
 
@@ -701,7 +735,8 @@ class UtenyaaServer:
         # server behaves identically to an untouched build unless the
         # operator actively twists a knob. See /api/tune_* endpoints.
         self.tune = {
-            "relay_player_sync":      True,   # rebroadcast PLAYER_STATE as PLAYER_SYNC
+            # relay_player_sync removed in UNETv2 — PLAYER_SYNC is always
+            # broadcast at SERVER_TICK_RATE with idle gating; no flag needed.
             "relay_input":            True,   # rebroadcast INPUT_STATE as INPUT_RELAY
             "crate_respawn_seconds":  CRATE_RESPAWN_SECONDS,
             "match_seconds_default":  MATCH_SECONDS_DEFAULT,
@@ -714,6 +749,12 @@ class UtenyaaServer:
 
         # Lobby players (keyed by game_pid 0..3, mapped from client user_id)
         self.game_players: dict[int, UtenyaaPlayer] = {}
+
+        # PLAYER_SYNC idle-gating + keyframe tracking. Maps pid →
+        # (x, y, z, angle, hp, pickup, ticks_since_last_send). The tick
+        # loop compares current state to this cache; sends only on change
+        # or when keyframe interval elapsed (forces resync against loss).
+        self._last_sync_state: dict[int, tuple] = {}
 
         # Bots
         self.bots: list[BotPlayer] = []
@@ -1056,6 +1097,7 @@ class UtenyaaServer:
             c.ready_at = 0.0
             c.stage_loaded = False
         self.game_players.clear()
+        self._last_sync_state.clear()
         self.match = None
         self._broadcast_lobby()
 
@@ -1128,11 +1170,38 @@ class UtenyaaServer:
                 eid = self.match.alloc_entity_id()
                 self._broadcast(build_mine_spawn(eid, p.pid, p.x, p.y, p.z))
 
-            # Broadcast a PLAYER_SYNC so remote clients track the bot
-            if bot.ai.tick % 4 == 0:
+            # (Bot PLAYER_SYNC handled by the unified broadcast loop below
+            # so all 4 pid streams use the same 20Hz idle-gated cadence.)
+
+        # === Per-pid PLAYER_SYNC broadcast (UNETv2 smoothness pass) ===
+        # Tick at SERVER_TICK_RATE (20 Hz default). For each in-match pid,
+        # send a PLAYER_SYNC iff the QUANTIZED state changed since last
+        # send (so the gate fires exactly when a wire byte would differ —
+        # not on sub-quantum jitter). Force-send a keyframe every 1.0 s
+        # for packet-loss recovery. Idle players burn a single ~14-byte
+        # keyframe per second; active players send ~14 B every 50 ms.
+        # Worst-case 4P active total: 4 × 20 × 14 ≈ 1120 B/s — fits
+        # 14.4 kbps Japanese modems with headroom for events.
+        keyframe_interval = SERVER_TICK_RATE  # 20 ticks = 1.0s
+        for pid, p in self.game_players.items():
+            last = self._last_sync_state.get(pid)  # (q_tuple, ticks_since)
+            ticks_since = (last[1] + 1) if last else (keyframe_interval + 1)
+            # Compute the EXACT 9-tuple of values that go on the wire.
+            # Comparing these directly means the idle gate fires only when
+            # a downstream byte would actually differ.
+            cur_q = (
+                _q_pos(p.x), _q_pos(p.y), _q_z(p.z),
+                _q_vel(p.dx), _q_vel(p.dy), _q_vel(p.dz),
+                _q_angle(p.angle), p.hp & 0x0F, p.pickup & 0x0F,
+            )
+            changed = (last is None) or (cur_q != last[0])
+            if changed or ticks_since >= keyframe_interval:
                 self._broadcast(build_player_sync(
-                    p.pid, p.x, p.y, p.z, p.dx, p.dy, p.dz,
-                    p.angle, p.hp, 0xFF))
+                    pid, p.x, p.y, p.z, p.dx, p.dy, p.dz,
+                    p.angle, p.hp, p.pickup))
+                self._last_sync_state[pid] = (cur_q, 0)
+            else:
+                self._last_sync_state[pid] = (last[0], ticks_since)
 
         # End conditions
         alive_count = sum(1 for p in self.game_players.values() if p.alive)
@@ -1298,10 +1367,12 @@ class UtenyaaServer:
                 p.x, p.y, p.z, p.dx, p.dy, p.dz = x, y, z, dx, dy, dz
                 p.angle = angle
                 p.hp = hp
-            if self.tune.get("relay_player_sync", True):
-                self._broadcast(build_player_sync(target_pid, x, y, z, dx, dy, dz,
-                                                  angle, hp, p.pickup if p else 0xFF),
-                                exclude_uid=c.user_id)
+            # No immediate relay anymore — the per-pid PLAYER_SYNC tick
+            # loop in _tick_match handles broadcast at SERVER_TICK_RATE
+            # (20 Hz) with idle gating + 1s keyframe. Eliminates the
+            # 50 Hz fan-out from clients sending per-frame PLAYER_STATE
+            # which previously hit ~6 KB/s downstream — well over the
+            # 14.4k modem budget. See UNETv2 design notes.
         elif op == UNET_CLIENT_FIRE_BULLET and len(payload) >= 1 + 24:
             if self.match is None: return
             x, y, z, dx, dy, dz = struct.unpack("!iiiiii", payload[1:25])

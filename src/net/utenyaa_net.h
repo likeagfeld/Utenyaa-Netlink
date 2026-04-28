@@ -95,14 +95,28 @@ typedef struct {
 
 /* Server-broadcast snapshot of a remote player (one slot of PLAYER_SYNC). */
 typedef struct {
-    int32_t  x, y, z;          /* Fxp raw (16.16) */
+    int32_t  x, y, z;          /* Fxp raw (16.16) — restored from quantized wire */
     int32_t  dx, dy, dz;       /* Fxp raw */
     int16_t  angle;            /* Trigonometry raw */
     uint8_t  health;
     uint8_t  pickup;           /* UNET_PICKUP_* */
-    uint16_t last_update_frame;
+    uint16_t arrived_frame;    /* g_net.local_frame when this snapshot arrived */
     bool     valid;
 } unet_player_sync_t;
+
+/* Snapshot ring buffer for remote players. Stores the last N PLAYER_SYNC
+ * frames per pid so the client renderer can interpolate at "now - 100ms"
+ * for visual smoothness without warping. Sized to hold 200ms of history
+ * at 20Hz server tick = 4 entries; bumped to 6 to absorb 30Hz bursts
+ * and modem jitter without dropping the eldest needed sample. */
+#define UNET_SNAP_HISTORY  6
+#define UNET_INTERP_LAG_FRAMES 5  /* render at "now - 5 frames" (~100ms @ 50fps) */
+
+typedef struct {
+    unet_player_sync_t entries[UNET_SNAP_HISTORY];
+    int                head;       /* index of newest; wraps */
+    int                count;      /* 0..UNET_SNAP_HISTORY */
+} unet_snap_ring_t;
 
 /* Crate roster entry (sent in GAME_START + updates via CRATE_SPAWN/DESTROY). */
 typedef struct {
@@ -169,8 +183,15 @@ typedef struct {
     unet_crate_entry_t crates[UNET_MAX_CRATES];
     int crate_count;
 
-    /* Remote player snapshots (indexed by player_id) */
+    /* Remote player snapshots (indexed by player_id) — newest snapshot
+     * for quick "current value" reads. */
     unet_player_sync_t remote_players[UNET_MAX_PLAYERS];
+
+    /* Snapshot history per pid for interpolation (replaces the previous
+     * lerp+extrapolate-from-single-snapshot approach which warped under
+     * jitter). The render path reads the buffer at "arrived_frame -
+     * UNET_INTERP_LAG_FRAMES" and lerps between bracketing snapshots. */
+    unet_snap_ring_t   snap_ring[UNET_MAX_PLAYERS];
 
     /* In-game input relay -- per-player ring buffers */
     unet_input_entry_t remote_inputs[UNET_MAX_PLAYERS][UNET_INPUT_BUFFER_PER_PLAYER];
