@@ -261,6 +261,10 @@ static void on_game_start(const uint8_t* p, int len)
     g_net.match_seconds_total = unet_r_u16(&p[off]); off += 2;
     g_net.match_seconds_left  = g_net.match_seconds_total;
     g_net.sudden_death = false;
+    /* Clear the previous match's winner banner — lobby_draw shows
+     * `nd->has_last_results` until the next match starts (per user
+     * directive: WINNER persists until new round). */
+    g_net.has_last_results = false;
     clear_crates();
     if (off < len) {
         cc = p[off++];

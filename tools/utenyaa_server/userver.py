@@ -700,7 +700,7 @@ class UtenyaaServer:
             "friendly_fire":          True,   # user-locked ON but toggleable for test
             "allow_bots_start":       True,   # whether bots alone can meet MIN_TO_START
             "timer_broadcast_hz":     1,      # MATCH_TIMER broadcasts per second
-            "sudden_death_enabled":   True,
+            "sudden_death_enabled":   False,  # default off — timer=0 ends match cleanly with highest-HP winner. Admin can flip via /api/tune_sudden_death.
             "verbose_rx_log":         True,   # alpha: log every RX while debugging start-flow
         }
 

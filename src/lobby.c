@@ -332,6 +332,24 @@ void lobby_draw(void)
     font_printf(FONT_X(1), FONT_Y(4), 500,
                 "PLAYERS: %d/%d", nd->lobby_count, UNET_MAX_PLAYERS);
 
+    /* Persistent WINNER banner — shows after a match ends, stays
+     * until the next match begins (on_game_start clears
+     * has_last_results). Cleared row when no results to show
+     * so it doesn't leave stale text. */
+    if (nd->has_last_results &&
+        nd->last_winner_id < UNET_MAX_PLAYERS &&
+        nd->game_roster[nd->last_winner_id].active)
+    {
+        font_printf(FONT_X(1), FONT_Y(5), 500,
+                    "LAST WINNER: %-20s",
+                    nd->game_roster[nd->last_winner_id].name);
+    }
+    else
+    {
+        font_draw("                                      ",
+                  FONT_X(1), FONT_Y(5), 500);
+    }
+
     if (g_z_held) {
         draw_z_overlay(nd);
         g_z_was_held = true;
