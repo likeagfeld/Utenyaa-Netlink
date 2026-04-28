@@ -211,14 +211,21 @@ void unet_glue_tick_frame(void)
     /* Network state machine (runs every frame once transport is live) */
     unet_tick();
 
-    /* Sync C++-side g_Game.myPlayerID from the net state as soon as
-     * WELCOME arrives (server-assigned pid). Previously this only
-     * synced when entering GAMEPLAY, so the lobby's self-row marker
-     * couldn't find its own id in LOBBY_STATE. */
+    /* Sync C++-side g_Game.myPlayerID + myPlayerID2 from the net state.
+     * myPlayerID set as soon as WELCOME arrives (server-assigned pid).
+     * myPlayerID2 set when LOCAL_PLAYER_ACK arrives at match-start
+     * (server-allocated P2 pid). WITHOUT this second sync, the C++
+     * bridge's `g_Game.myPlayerID2 != 0xFF` death-check guard never
+     * passes → CLIENT_DEATH_P2 (op 0x1D) is never sent → server's
+     * alive_count never drops on P2 death → match doesn't end on
+     * kill. (User-reported bug, root-caused 2026-04-28.) */
     {
         const unet_state_data_t* nd = unet_get_data();
         if (nd->my_player_id != 0xFF && g_Game.myPlayerID != nd->my_player_id) {
             g_Game.myPlayerID = nd->my_player_id;
+        }
+        if (nd->my_player_id2 != 0xFF && g_Game.myPlayerID2 != nd->my_player_id2) {
+            g_Game.myPlayerID2 = nd->my_player_id2;
         }
     }
 

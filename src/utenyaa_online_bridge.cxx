@@ -232,7 +232,7 @@ static int  s_match_end_timer = 0;
 static bool s_match_end_pending = false;
 static uint8_t s_match_end_winner = 0xFF;
 static bool s_match_end_sudden = false;
-#define MATCH_END_FRAMES 300   /* ~5s @ 60fps */
+#define MATCH_END_FRAMES 90    /* ~1.5s @ 60fps — short WINNER banner */
 
 static void cb_game_over(uint8_t winner_id, bool sudden)
 {
