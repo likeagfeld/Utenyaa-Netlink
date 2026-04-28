@@ -488,31 +488,8 @@ void            jo_goto_boot_menu(void)
 
 #ifdef JO_DEBUG
 
-extern void unet_send_dbg_log(const char *text);
-
 void            __jo_core_error(char *message, const char *function)
 {
-    /* Pipe the error to the server journal BEFORE any rendering — the
-     * Saturn might hang in jo_core_suspend before the on-screen text
-     * is readable. function/message are concatenated in a tiny stack
-     * buffer for cheap delivery (no malloc, no sprintf). */
-    {
-        char dbg[80];
-        int n = 0;
-        const char *p = "ERR ";
-        while (*p && n < 79) dbg[n++] = *p++;
-        if (function) {
-            p = function;
-            while (*p && n < 79) dbg[n++] = *p++;
-            if (n < 78) { dbg[n++] = ':'; dbg[n++] = ' '; }
-        }
-        if (message) {
-            p = message;
-            while (*p && n < 79) dbg[n++] = *p++;
-        }
-        dbg[n] = '\0';
-        unet_send_dbg_log(dbg);
-    }
 #ifdef JO_COMPILE_WITH_PRINTF_SUPPORT
     int         usage;
 

@@ -3,14 +3,6 @@
 #include "std/vector.h"  // Include necessary header for std::vector
 #include "Message.hpp"
 
-extern "C" void unet_send_dbg_log(const char *text);
-
-/* Set to true by main.cxx right before `new World()` so only the ctor
- * chain of the gameplay-startup path emits trace lines (avoids
- * flooding the UART during boot when every menu / UI element
- * registers a TrackableObject). Cleared after gameplay is up. */
-extern bool g_TO_trace;
-
 /**
  * @brief Template structure for objects that can be tracked.
  * @tparam T The type of the trackable object.
@@ -27,9 +19,7 @@ struct TrackableObject : public IMessageHandler
      */
     TrackableObject()
     {
-        if (g_TO_trace) unet_send_dbg_log("TO_pre_pb");
         objects.push_back(static_cast<T*>(this));
-        if (g_TO_trace) unet_send_dbg_log("TO_post_pb");
     }
 
     /**

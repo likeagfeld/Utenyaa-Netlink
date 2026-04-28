@@ -80,15 +80,6 @@ void	                *jo_malloc_with_behaviour(unsigned int n, const jo_malloc_b
     int        zone;
     jo_memory_block     *block;
 
-    /* Trace gate: only log when explicitly enabled by the gameplay-
-     * startup path so boot-time allocations don't flood the UART. The
-     * flag is g_TO_trace; declared as unsigned char in extern decl
-     * because C++ bool / C _Bool ABI parity is sketchy on cross-TU
-     * linkage. main.cxx defines `bool g_TO_trace` which the linker
-     * unifies with this byte (sizeof(bool) == 1 on SH-2 ELF). */
-    extern unsigned char g_TO_trace;
-    if (g_TO_trace) unet_send_dbg_log("MAL_enter");
-
 #ifdef JO_DEBUG
     if (n == 0)
     {
@@ -144,12 +135,10 @@ malloc_new_segment:
         if (behaviour != JO_FAST_ALLOCATION)
             goto malloc_new_segment;
     }
-    if (g_TO_trace) unet_send_dbg_log("MAL_NULL");
     return (JO_NULL);
 malloc_new_block:
     block->zone = zone;
     block->size = n;
-    if (g_TO_trace) unet_send_dbg_log("MAL_ok");
     return (block + 1);
 }
 
@@ -178,22 +167,6 @@ void                            jo_reduce_memory_fragmentation(void)
     }
 }
 
-/* Forward decl: send a debug trace line back to the server journal.
- * Defined in src/net/utenyaa_net.c; safe to call even mid-heap-
- * corruption because tx() guards on g_net.transport non-null.
- * Build is silent without JO_DEBUG. */
-extern void unet_send_dbg_log(const char *text);
-
-static inline void _ute_u32_to_hex(unsigned int v, char *out)
-{
-    int i;
-    for (i = 7; i >= 0; i--) {
-        unsigned d = v & 0xF;
-        out[i] = (char)((d < 10) ? ('0' + d) : ('A' + d - 10));
-        v >>= 4;
-    }
-}
-
 inline void                     jo_free(const void * const p)
 {
     jo_memory_block             *block;
@@ -201,7 +174,6 @@ inline void                     jo_free(const void * const p)
 #ifdef JO_DEBUG
     if (p == JO_NULL)
     {
-        unet_send_dbg_log("FREE_NULL");
         jo_core_error("Null pointer");
         return ;
     }
@@ -210,10 +182,6 @@ inline void                     jo_free(const void * const p)
 #ifdef JO_DEBUG
     if (block->size == 0 || JO_MOD_POW2(block->size, 4) != 0)
     {
-        char msg[24] = "BAD_FREE p=00000000";
-        _ute_u32_to_hex((unsigned int)p, &msg[11]);
-        msg[19] = '\0';
-        unet_send_dbg_log(msg);
         jo_core_error("Bad pointer: %x", (unsigned int)p);
         return ;
     }
