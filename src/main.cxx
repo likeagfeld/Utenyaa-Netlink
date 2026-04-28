@@ -13,6 +13,7 @@
 #include "Utils/Debug.hpp"
 
 #include "net/utenyaa_main_glue.h"
+#include "net/utenyaa_net.h"
 #include "utenyaa_online_bridge.hpp"
 #include "Entities/Player.hpp"
 
@@ -164,6 +165,12 @@ int main()
 			g_Game.input.pressedStart = false;
 			g_Game.input.pressedLT = false;
 			g_Game.input.pressedRT = false;
+			/* Pull fresh leaderboard so wins/kills/deaths from the
+			 * just-ended match show up when the user holds Z. lobby_init
+			 * only requests leaderboard ONCE on the first CONNECTING →
+			 * LOBBY transition; subsequent match-end → LOBBY returns
+			 * would otherwise show stale data (often all zeros). */
+			unet_request_leaderboard();
 			jo_clear_screen();
 		}
 

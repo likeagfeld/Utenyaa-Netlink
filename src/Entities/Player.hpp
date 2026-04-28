@@ -105,9 +105,13 @@ namespace Entities
 				((uint8_t)this->controller == g_Game.myPlayerID) ||
 				(g_Game.hasSecondLocal && (uint8_t)this->controller == g_Game.myPlayerID2);
 
-			// Do the shooting
+			// Do the shooting. HELD + cooldown gating (was rising-edge
+			// only) so the trigger feels consistent: holding A auto-fires
+			// at the cooldown rate (~0.45s @60fps) instead of relying on
+			// per-frame button-down detection that occasionally missed
+			// quick taps. shootCoolDownTimeLeft still rate-limits.
 			if (isLocalCtrl &&
-				Helpers::IsControllerButtonDown(this->controller, JO_KEY_A) &&
+				Helpers::IsControllerButtonPressed(this->controller, JO_KEY_A) &&
 				this->shootCoolDownTimeLeft == 0)
 			{
 				PoneSound::Sound::Play(1, PoneSound::PlayMode::Semi, 5);
@@ -227,18 +231,29 @@ namespace Entities
 				if (rawX > DEADZONE || rawX < -DEADZONE ||
 				    rawY > DEADZONE || rawY < -DEADZONE)
 				{
+					/* Both X and Y axes are inverted relative to the world's
+					 * world-coord-to-screen mapping in this engine (camera
+					 * + jo_3d_rotate_matrix_rad_x(0.5) + translate(-10,-10,0)
+					 * combine such that world +X maps to screen LEFT and
+					 * world +Y maps to screen DOWN). Negate both raw stick
+					 * values so pushing the stick UP/LEFT results in
+					 * tank movement screen-UP/screen-LEFT respectively. */
 					const Fxp INV_127 = Fxp(1.0 / 127.0);
-					inX =  Fxp::FromInt(rawX) * INV_127;
+					inX = -Fxp::FromInt(rawX) * INV_127;
 					inY = -Fxp::FromInt(rawY) * INV_127;
 					analogActive = true;
 				}
 				if (!analogActive)
 				{
-					// D-pad fallback. Independent ±1 contributions → 8 dirs.
-					if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_RIGHT)) inX = inX + Fxp(1.0);
-					if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_LEFT))  inX = inX - Fxp(1.0);
-					if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_UP))    inY = inY + Fxp(1.0);
-					if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_DOWN))  inY = inY - Fxp(1.0);
+					/* D-pad fallback. Same inversion reason as the analog
+					 * branch above — pad RIGHT must produce inX < 0 (which,
+					 * after the world-space negation that the targetAngle
+					 * snap encodes via Vec3(inX,inY) below, manifests as
+					 * tank movement to screen-RIGHT). Same for UP→inY<0. */
+					if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_RIGHT)) inX = inX - Fxp(1.0);
+					if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_LEFT))  inX = inX + Fxp(1.0);
+					if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_UP))    inY = inY - Fxp(1.0);
+					if (Helpers::IsControllerButtonPressed(this->controller, JO_KEY_DOWN))  inY = inY + Fxp(1.0);
 					if (inX != Fxp(0.0) && inY != Fxp(0.0))
 					{
 						const Fxp INV_SQRT2 = Fxp(0.7071);
