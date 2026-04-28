@@ -317,6 +317,13 @@ void unet_send_disconnect(void);
  * for diagnosing client-side crashes that prevent on-screen output
  * from being read off the TV. Server logs the text at INFO level. */
 void unet_send_dbg_log(const char* text);
+
+/* Reset client-side ready flag to match server's post-match reset.
+ * Called when transitioning from GAMEPLAY back to LOBBY so the next
+ * lobby session starts with a clean slate (otherwise the stale flag
+ * causes the START handler's resync logic to fire a redundant READY
+ * toggle that flips the player back to NOT ready). */
+void unet_reset_ready_state(void);
 void unet_request_leaderboard(void);
 void unet_log(const char* msg);
 void unet_clear_log(void);

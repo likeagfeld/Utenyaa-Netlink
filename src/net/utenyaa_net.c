@@ -847,6 +847,13 @@ void unet_send_disconnect(void)
     g_net.state = UNET_STATE_DISCONNECTED;
 }
 
+/* Server-side _end_match resets c.ready=False. Client must mirror so
+ * stale my_ready doesn't cause a double-toggle on the next match. */
+void unet_reset_ready_state(void)
+{
+    g_net.my_ready = false;
+}
+
 /* Send a free-form ASCII trace line to the server journal. Intentionally
  * uses the local tx_buf only (no malloc) and clamps text to 64 chars so
  * we can fire this even mid-corruption without expanding the failure

@@ -156,8 +156,18 @@ int main()
 		// logic inside menu.Update is gated on !isOnlineMode (see
 		// Menu.hpp:204) so the user's still-held START from the lobby
 		// can no longer pause the freshly-started online match.
+		// Skip menu.Update entirely during online gameplay — its
+		// jo_clear_screen calls happen mid-display and wipe NBG0
+		// cells while VDP2 is scanning them out, causing the visible
+		// strobe on top-of-screen text reported by the user. World
+		// ctor calls jo_clear_screen once at gameplay-start so any
+		// residue from lobby is gone; subsequent frames just need
+		// to write the fresh HUD cells, no clear required.
 		static UI::Menu menu;
-		menu.Update();
+		if (!(g_Game.isOnlineMode && g_Game.gameState == UGAME_STATE_GAMEPLAY))
+		{
+			menu.Update();
+		}
 
 		if (Settings::Quit && worldPtr)
 		{
@@ -182,6 +192,18 @@ int main()
 				worldPtr = nullptr;
 			}
 			PoneSound::CD::Play(2, 2, true);
+			/* Mirror server-side post-match resets so the next lobby
+			 * session starts clean. Server _end_match resets c.ready=
+			 * False; without these, stale my_ready / pressedABC /
+			 * pressedStart cause the next A+START sequence to fire a
+			 * redundant READY toggle that flips the player back to
+			 * NOT ready (user-reported 2nd-game lobby bug). */
+			unet_reset_ready_state();
+			g_Game.input.pressedABC = false;
+			g_Game.input.pressedStart = false;
+			g_Game.input.pressedLT = false;
+			g_Game.input.pressedRT = false;
+			jo_clear_screen();
 		}
 
 		// Online lobby transitioned us into gameplay — sync Settings so

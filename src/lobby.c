@@ -319,10 +319,14 @@ void lobby_draw(void)
     if (g_Game.gameState != UGAME_STATE_LOBBY) return;
     nd = unet_get_data();
 
-    /* Clear NBG0 each frame — roster / ready states / vote tallies
-     * change every frame and jo_printf doesn't auto-erase overwritten
-     * cells, so stale rows would accumulate without this. */
-    jo_clear_screen();
+    /* DO NOT call jo_clear_screen() per frame — that wipes NBG0 cells
+     * mid-display and causes the visible strobe on the "UTENYAA LOBBY"
+     * title and other text rows. Instead, every text write below uses
+     * a fixed-width format (e.g. "%-16s") so old characters are
+     * overwritten in place. The lobby is cleared once at lobby_init()
+     * (transition into the screen). Same fix is applied to the
+     * gameplay path's HUD writes — nothing clears NBG0 after World
+     * ctor's initial clear. */
 
     font_draw_centered("UTENYAA LOBBY", FONT_Y(2), 500);
     font_printf(FONT_X(1), FONT_Y(4), 500,
@@ -347,17 +351,21 @@ void lobby_draw(void)
      * containing 'P2: ' / '2: ' bytes that recurred as the literal
      * value of the recurring jo_free 'Bad pointer 0x..323A20' crash. */
     font_draw("#  NAME             STATUS", FONT_X(1), FONT_Y(6), 500);
-    for (i = 0; i < nd->lobby_count && i < UNET_MAX_PLAYERS; i++) {
-        const unet_lobby_player_t* lp = &nd->lobby_players[i];
-        char marker;
-
-        if (!lp->active) continue;
-        marker = (lp->id == g_Game.myPlayerID) ? '>' : ' ';
-
-        font_printf(FONT_X(1), FONT_Y(7 + i), 500,
-                    "%c%-2d %-16s %s",
-                    marker, i + 1, lp->name,
-                    lp->ready ? "READY" : "     ");
+    for (i = 0; i < UNET_MAX_PLAYERS; i++) {
+        if (i < nd->lobby_count && nd->lobby_players[i].active) {
+            const unet_lobby_player_t* lp = &nd->lobby_players[i];
+            char marker = (lp->id == g_Game.myPlayerID) ? '>' : ' ';
+            font_printf(FONT_X(1), FONT_Y(7 + i), 500,
+                        "%c%-2d %-16s %s",
+                        marker, i + 1, lp->name,
+                        lp->ready ? "READY" : "     ");
+        } else {
+            /* Pad vacated slot with spaces so a previously-occupied
+             * row doesn't show stale data after a player leaves
+             * (no per-frame jo_clear_screen anymore). */
+            font_draw("                            ",
+                      FONT_X(1), FONT_Y(7 + i), 500);
+        }
     }
 
     /* Waiting / start gate */
