@@ -153,19 +153,16 @@ namespace Entities
 
 					if (query.Handled && query.Controller != this->origin)
 					{
-						/* In online mode, HP is server-authoritative —
-						 * applying a local Damage message here would
-						 * stack on top of the server's lag-comp DAMAGE
-						 * broadcast and the next PLAYER_SYNC's authoritative
-						 * HP, causing visible double-tick on the victim's
-						 * HUD before reconciliation. Bullet still destroys
-						 * (visual hit + Explosion FX) but only the server
-						 * decrements HP. Offline keeps the legacy local
-                         * application so single-player damage works. */
-						if (!g_Game.isOnlineMode)
-						{
-							collidesWith->HandleMessages(Messages::Damage(Bullet::Damage));
-						}
+						/* Apply damage locally (upstream behavior).
+						 * Each client's bullet sim damages its own local
+						 * copy of the target. The victim's own local sim
+						 * decrements their authoritative HP and sends
+						 * CLIENT_DEATH at hp=0. Server's lag-comp
+						 * broadcast (when it fires) is additive insurance
+						 * for point-blank misses, not the primary damage
+						 * path. Without this local apply, neither
+						 * authority reaches HP and nothing dies. */
+						collidesWith->HandleMessages(Messages::Damage(Bullet::Damage));
 						destroyBullet = true;
 					}
 				}

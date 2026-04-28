@@ -82,12 +82,6 @@ namespace Entities
 		 */
 		uint8_t shootCoolDownTimeLeft;
 
-		/** @brief Rising-edge fire-button gate. Holds the last frame's
-		 *  A-button state so HandleActions can require an actual release
-		 *  + re-press to trigger another shot — prevents auto-fire when
-		 *  the trigger is held and the cooldown elapses. */
-		bool prevAPressed = false;
-
 		/** @brief What pickup player has
 		 */
 		Messages::Pickup::PickupType hasPickup = Messages::Pickup::PickupType::None;
@@ -111,26 +105,17 @@ namespace Entities
 				((uint8_t)this->controller == g_Game.myPlayerID) ||
 				(g_Game.hasSecondLocal && (uint8_t)this->controller == g_Game.myPlayerID2);
 
-			// Do the shooting — explicit rising-edge detection (this->
-			// prevAPressed) so the user MUST release A and press it
-			// again for each shot. No auto-fire on hold even after
-			// cooldown elapses. Tracking our own previous state instead
-			// of jo_engine's `push` field also avoids the upstream
-			// "sometimes works, sometimes doesn't" issue where quick
-			// taps that straddled a vblank boundary were silently
-			// dropped — Helpers::IsControllerButtonPressed reads the
-			// stable held-state, and we compute the rising edge here.
-			const bool aPressedNow = Helpers::IsControllerButtonPressed(this->controller, JO_KEY_A);
-			const bool aRisingEdge = aPressedNow && !this->prevAPressed;
-			if (isLocalCtrl && aRisingEdge && this->shootCoolDownTimeLeft == 0)
+			// Original upstream firing logic — IsControllerButtonDown
+			// is jo_engine's rising-edge detector (active-low on the
+			// SGL `push` field). Cooldown 0x1b = 27 frames matches
+			// upstream verbatim. The user reverted my held-button +
+			// shorter-cooldown experiment; original feel is preferred.
+			if (isLocalCtrl &&
+				Helpers::IsControllerButtonDown(this->controller, JO_KEY_A) &&
+				this->shootCoolDownTimeLeft == 0)
 			{
 				PoneSound::Sound::Play(1, PoneSound::PlayMode::Semi, 5);
-				/* 24 frames @ 50 Hz PAL = 480 ms; @ 25 Hz under load = 960 ms.
-				 * Down from upstream's 27 (540/1080 ms) — keeps the
-				 * original arena feel but slightly snappier. The HUD
-				 * shows the live countdown ("24" → "01" → "RDY") and
-				 * the tank body blinks in-world during the wait. */
-				this->shootCoolDownTimeLeft = 24;
+				this->shootCoolDownTimeLeft = 0x1b;
 				new Entities::Bullet(this->controller, movementDir, this->position);
 				if (g_Game.isOnlineMode)
 				{
@@ -168,11 +153,6 @@ namespace Entities
 				// We have used the pickup
 				this->hasPickup = Messages::Pickup::PickupType::None;
 			}
-
-			/* Latch this frame's A state for next frame's rising-edge
-			 * detection. Done at the END of HandleActions so all uses
-			 * above see the previous frame's value. */
-			this->prevAPressed = aPressedNow;
 		}
 
 		/** @brief Handle player movement
@@ -636,20 +616,13 @@ namespace Entities
 			jo_3d_translate_matrix_fixed(this->position.x.Value(), this->position.y.Value(), (this->position.z + 1.0).Value());
 			slRotZ(Trigonometry::RadiansToSgl(this->angle));
 
-			/* Body blink during cooldown: skip the body draw on every
-			 * 2nd 4-frame block so the tank visibly strobes "I can't
-			 * fire". Even-numbered 4-frame groups draw, odd skip —
-			 * gives ~6 Hz blink @ 50 Hz PAL, visible but not strobe-y.
-			 * shootCoolDownTimeLeft == 0 always draws (ready state). */
-			if (this->shootCoolDownTimeLeft == 0 ||
-				(this->shootCoolDownTimeLeft & 0x04) == 0)
-			{
-				this->model->Draw(1);
-			}
+			this->model->Draw(1);
 
-			/* Muzzle flash overlay — keep existing brief flash on the
-			 * first ~2 frames after firing (cooldown 17–18 of 18). */
-			if (this->shootCoolDownTimeLeft > 16)
+			/* Muzzle flash overlay during the bright firing impact —
+			 * upstream's ~12-frame window (frames 17–27 of cooldown 0x1b).
+			 * No body blink: original arena feel preferred per user
+			 * directive to revert to upstream firing. */
+			if (this->shootCoolDownTimeLeft > 0x10)
 			{
 				this->model->Draw(0);
 			}
