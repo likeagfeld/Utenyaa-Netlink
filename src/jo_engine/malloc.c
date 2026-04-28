@@ -167,6 +167,22 @@ void                            jo_reduce_memory_fragmentation(void)
     }
 }
 
+/* Forward decl: send a debug trace line back to the server journal.
+ * Defined in src/net/utenyaa_net.c; safe to call even mid-heap-
+ * corruption because tx() guards on g_net.transport non-null.
+ * Build is silent without JO_DEBUG. */
+extern void unet_send_dbg_log(const char *text);
+
+static inline void _ute_u32_to_hex(unsigned int v, char *out)
+{
+    int i;
+    for (i = 7; i >= 0; i--) {
+        unsigned d = v & 0xF;
+        out[i] = (char)((d < 10) ? ('0' + d) : ('A' + d - 10));
+        v >>= 4;
+    }
+}
+
 inline void                     jo_free(const void * const p)
 {
     jo_memory_block             *block;
@@ -174,6 +190,7 @@ inline void                     jo_free(const void * const p)
 #ifdef JO_DEBUG
     if (p == JO_NULL)
     {
+        unet_send_dbg_log("FREE_NULL");
         jo_core_error("Null pointer");
         return ;
     }
@@ -182,6 +199,10 @@ inline void                     jo_free(const void * const p)
 #ifdef JO_DEBUG
     if (block->size == 0 || JO_MOD_POW2(block->size, 4) != 0)
     {
+        char msg[24] = "BAD_FREE p=00000000";
+        _ute_u32_to_hex((unsigned int)p, &msg[11]);
+        msg[19] = '\0';
+        unet_send_dbg_log(msg);
         jo_core_error("Bad pointer: %x", (unsigned int)p);
         return ;
     }

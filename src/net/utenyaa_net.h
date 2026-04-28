@@ -312,6 +312,11 @@ void unet_send_remove_local_player(void);
 
 /* Lifecycle */
 void unet_send_disconnect(void);
+
+/* Free-form debug log → server journal. Cheap one-shot ASCII trace
+ * for diagnosing client-side crashes that prevent on-screen output
+ * from being read off the TV. Server logs the text at INFO level. */
+void unet_send_dbg_log(const char* text);
 void unet_request_leaderboard(void);
 void unet_log(const char* msg);
 void unet_clear_log(void);

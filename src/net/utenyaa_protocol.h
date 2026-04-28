@@ -65,6 +65,7 @@ extern "C" {
 #define UNET_MSG_STAGE_VOTE        0x22  /* [stage_id:1] 0=Island 1=Cross 2=Valley 3=Railway */
 #define UNET_MSG_STAGE_LOADED_ACK  0x23  /* No payload - all peers ACK before GAME_START */
 #define UNET_MSG_CHARACTER_SELECT_P2 0x24 /* [player_id:1][char_id:1] */
+#define UNET_MSG_CLIENT_DBG_LOG    0x25  /* [len:1][text:N] - free-form debug trace, server logs to journal */
 
 /*============================================================================
  * Utenyaa Server -> Client Opcodes (0xA0-0xBF)

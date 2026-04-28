@@ -23,6 +23,8 @@
 #include "../Utils/Debug.hpp"
 #include "../Utils/PakTextureLoader.hpp"
 
+extern "C" void unet_send_dbg_log(const char *text);
+
 
 namespace Entities
 {
@@ -45,10 +47,14 @@ namespace Entities
 		 */
 		World(const char* name)
 		{
+			unet_send_dbg_log("WORLD_enter");
+
 			// Load map file
 			this->Map = new Objects::Map(name, Objects::Terrain::FirstGroundTextureIndex);
+			unet_send_dbg_log("WORLD_map_made");
 			Objects::Terrain::Map = this->Map;
 			Objects::Terrain::ClearColliders();
+			unet_send_dbg_log("WORLD_terrain_set");
 
 			// Player contorller
 			uint8_t controller = 0;
@@ -83,7 +89,9 @@ namespace Entities
 				}
 			}
 
+			unet_send_dbg_log("WORLD_entity_loop_done");
 			jo_clear_screen();
+			unet_send_dbg_log("WORLD_ctor_done");
 		}
 
 		/** @brief Destroy the World object

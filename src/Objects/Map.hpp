@@ -6,6 +6,8 @@
 #include "../Utils/std/vector.h"
 #include "../Interfaces/IColliding.hpp"
 
+extern "C" void unet_send_dbg_log(const char *text);
+
 /** @brief Game objects
  */
 namespace Objects
@@ -269,13 +271,17 @@ namespace Objects
 	 */
 	inline Map::Map(const char* file, int firstTerrainTexture)
 	{
+		unet_send_dbg_log("MAP_enter");
+
 		// Load level data
 		char* stream = jo_fs_read_file_in_dir(file, JO_ROOT_DIR, NULL);
+		unet_send_dbg_log("MAP_file_read");
 		char* streamStart = stream;
 		LevelData* level = GetAndIterate<LevelData>(stream);
 
 		// Initialize mesh
 		this->mapMesh = Mesh3D((Map::MapDimensionSize + 1) * (Map::MapDimensionSize + 1), Map::MapDimensionSize * Map::MapDimensionSize);
+		unet_send_dbg_log("MAP_mesh_init");
 
 		this->Light.Direction = level->Sun.Direction;
 		this->Light.Color = level->Sun.Color;
@@ -372,9 +378,12 @@ namespace Objects
 			}
 		}
 
+		unet_send_dbg_log("MAP_tile_loop_done");
+
 		// Load entities to spawn
 		EntityDefinitionsCount = level->EntityCount;
 		this->EntityDefinitions = new EntityCreationDefinition[level->EntityCount];
+		unet_send_dbg_log("MAP_entitydef_alloc");
 		for (size_t entity = 0; entity < level->EntityCount; entity++)
 		{
 			EntityDefinition* entityPtr = GetAndIterate<EntityDefinition>(stream);
@@ -394,7 +403,9 @@ namespace Objects
 				);
 		}
 
+		unet_send_dbg_log("MAP_pre_free_stream");
 		jo_free(streamStart);
+		unet_send_dbg_log("MAP_done");
 	}
 
 	/** @brief Frees all resources and destroys the isntance

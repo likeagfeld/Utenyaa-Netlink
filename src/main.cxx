@@ -191,12 +191,14 @@ int main()
 		if (g_Game.isOnlineMode && g_Game.gameState == UGAME_STATE_GAMEPLAY
 			&& !Settings::IsActive)
 		{
+			unet_send_dbg_log("CP_GS_GAMEPLAY_seen");
 			const unet_state_data_t* nd = unet_get_data();
 			Settings::SelectedStage = nd->stage_id;
 			Settings::TotalSeconds = nd->match_seconds_total;
 			Settings::PlayerCount = nd->opponent_count;
 			jo_random_seed = nd->game_seed ? nd->game_seed : 1;
 			Settings::IsActive = true;
+			unet_send_dbg_log("CP_IsActive_set");
 		}
 
 		if (Settings::IsActive)
@@ -204,25 +206,33 @@ int main()
 
 			if (worldPtr == nullptr)
 			{
+				if (g_Game.isOnlineMode) unet_send_dbg_log("CP_pre_World_new");
 				Settings::GameEnded = false;
 				startTime = Fxp::FromInt(Settings::TotalSeconds);
 				worldPtr = new Entities::World(Settings::StageFiles[Settings::SelectedStage]);
+				if (g_Game.isOnlineMode) unet_send_dbg_log("CP_post_World_new");
 				PoneSound::CD::Play(3, 3, true);
+				if (g_Game.isOnlineMode) unet_send_dbg_log("CP_post_CD_Play");
 			}
 			slUnitMatrix(0);
+			if (g_Game.isOnlineMode) unet_send_dbg_log("CP_post_slUnitMatrix");
 
 			// Send local pad input + player state to server during online play
 			OnlineBridge::TickLocalPlayers();
+			if (g_Game.isOnlineMode) unet_send_dbg_log("CP_post_TickLocal");
 
 			// Update entities
 			for (auto* object : IUpdatable::objects) object->Update();
+			if (g_Game.isOnlineMode) unet_send_dbg_log("CP_post_EntityUpdate");
 
 			// Apply server PLAYER_SYNC snapshots to remote players AFTER their
 			// Update() so the overwrite is authoritative this frame (lerp+extrap).
 			OnlineBridge::ApplyRemoteSnapshots();
+			if (g_Game.isOnlineMode) unet_send_dbg_log("CP_post_ApplyRemote");
 
 			// Match-end countdown. Also: follow-winner spectator aim.
 			OnlineBridge::TickMatchEndPause();
+			if (g_Game.isOnlineMode) unet_send_dbg_log("CP_post_MatchEndPause");
 
 			if (g_Game.isOnlineMode && OnlineBridge::LocalIsDeadSpectator())
 			{

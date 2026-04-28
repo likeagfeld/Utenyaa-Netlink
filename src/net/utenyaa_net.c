@@ -847,6 +847,29 @@ void unet_send_disconnect(void)
     g_net.state = UNET_STATE_DISCONNECTED;
 }
 
+/* Send a free-form ASCII trace line to the server journal. Intentionally
+ * uses the local tx_buf only (no malloc) and clamps text to 64 chars so
+ * we can fire this even mid-corruption without expanding the failure
+ * surface. Frame format: [LEN_HI][LEN_LO][OP=0x25][text_len:1][text:N]. */
+void unet_send_dbg_log(const char* text)
+{
+    int tlen = 0;
+    int payload, off;
+    if (!text) return;
+    while (text[tlen] && tlen < 64) tlen++;
+    payload = 1 + 1 + tlen;          /* op + len + text */
+    off = 0;
+    g_net.tx_buf[off++] = (uint8_t)((payload >> 8) & 0xFF);
+    g_net.tx_buf[off++] = (uint8_t)(payload & 0xFF);
+    g_net.tx_buf[off++] = UNET_MSG_CLIENT_DBG_LOG;
+    g_net.tx_buf[off++] = (uint8_t)tlen;
+    {
+        int i;
+        for (i = 0; i < tlen; i++) g_net.tx_buf[off++] = (uint8_t)text[i];
+    }
+    tx(g_net.tx_buf, off);
+}
+
 void unet_request_leaderboard(void)
 {
     int n = simple_frame(g_net.tx_buf, UNET_MSG_LEADERBOARD_REQ, 0);

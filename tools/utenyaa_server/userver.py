@@ -109,6 +109,7 @@ UNET_CLIENT_THROW_BOMB = 0x20
 UNET_CLIENT_PICKUP_CRATE = 0x21
 UNET_STAGE_VOTE = 0x22
 UNET_STAGE_LOADED_ACK = 0x23
+UNET_CLIENT_DBG_LOG   = 0x25
 UNET_CHARACTER_SELECT_P2 = 0x24
 
 # ---- Utenyaa server->client opcodes ----
@@ -1378,6 +1379,15 @@ class UtenyaaServer:
                 self._broadcast_lobby()
         elif op == UNET_STAGE_LOADED_ACK:
             c.stage_loaded = True
+        elif op == UNET_CLIENT_DBG_LOG and len(payload) >= 2:
+            # Free-form debug trace from client. Frame body after op byte:
+            # [text_len:1][text:N]. Used to localise client-side crashes
+            # whose on-screen output we can't read from the TV — every
+            # checkpoint the client crosses lands in our journal.
+            tlen = payload[1]
+            if 2 + tlen <= len(payload):
+                msg = payload[2:2 + tlen].decode("ascii", errors="replace")
+                log.info("CLIENT_DBG[%s]: %s", c.username or "?", msg)
         elif op == UNET_LEADERBOARD_REQ:
             top = sorted(self.leaderboard.values(),
                          key=lambda e: (-e.get("wins", 0), -e.get("best_hp", 0)))[:10]
