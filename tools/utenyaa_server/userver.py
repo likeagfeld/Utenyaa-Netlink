@@ -34,6 +34,7 @@ import select
 import socket
 import struct
 import sys
+from collections import deque
 import threading
 import time
 import uuid
@@ -71,6 +72,11 @@ MAX_CRATES = 16
 STAGE_COUNT = 4
 STAGE_NAMES = ["Island", "Cross", "Valley", "Railway"]
 HP_MAX = 6
+# Damage per bullet hit. Mirrors C client's Entities::Bullet::Damage = 2
+# in src/Entities/Bullet.hpp. Used by the server-side lag-comp validator
+# so its damage assignment matches what the victim's local bullet sim
+# would have applied — no double-counting.
+BULLET_DAMAGE = 2
 MATCH_SECONDS_DEFAULT = 120
 MIN_TO_START = 2
 
@@ -426,6 +432,11 @@ class UtenyaaPlayer:
         self.is_bot = False
         self.last_input = 0
         self.sent_death = False
+        # Position history for lag-compensated bullet validation. deque
+        # of (server_tick, x, y, z) tuples in fxp 16.16 raw. Sized to
+        # cover the worst-case round-trip lag we want to compensate for:
+        # 30 ticks @ 20 Hz = 1.5 s. Older entries are evicted automatically.
+        self.pos_history = deque(maxlen=30)
 
 
 class Crate:
@@ -451,6 +462,11 @@ class MatchState:
         self.crates: list[Crate] = []
         self.next_entity_id = 1
         self.started_monotonic = time.monotonic()
+        # Server-tick counter used by the bullet lag-comp rewind. Increments
+        # each call to _tick_match (so rates other than 20Hz are correctly
+        # tracked by SERVER_TICK_RATE consumers). 32-bit wide; matches don't
+        # last 36+ minutes so wrap is irrelevant.
+        self.server_tick = 0
 
     def alloc_entity_id(self) -> int:
         eid = self.next_entity_id
@@ -1101,9 +1117,114 @@ class UtenyaaServer:
         self.match = None
         self._broadcast_lobby()
 
+    def _lag_comp_bullet_check(self, shooter_pid: int,
+                               ox: int, oy: int, oz: int,
+                               dx: int, dy: int, dz: int,
+                               rewind_ticks: int = 3,
+                               cone_radius: int = 8,
+                               damage: int = BULLET_DAMAGE) -> bool:
+        """Server-authoritative point-blank hit validation with rewind.
+
+        ox/oy/oz, dx/dy/dz are fxp 16.16 raw values from the shooter's
+        FIRE_BULLET packet. We rewind every other living player to their
+        position `rewind_ticks` server-ticks ago (covers the modem RTT
+        plus the client's interp buffer lag) and check whether any falls
+        inside the cone (≤ cone_radius world units AND in the bullet's
+        forward half-space).
+
+        On a hit we apply damage immediately and broadcast DAMAGE +
+        PLAYER_KILL events. The shooter's local bullet entity still
+        travels for cosmetic purposes; the victim's own local bullet
+        sim may also apply damage, but `sent_death`/`hp` clamping +
+        the victim's CLIENT_DEATH gate (only fires when hp drops to 0)
+        means double-application can't kill them twice.
+
+        Returns True if a hit was registered.
+        """
+        if self.match is None:
+            return False
+        target_tick = self.match.server_tick - rewind_ticks
+        # Shift fxp 16.16 → world-unit ints once for the cone math.
+        # >> 16 truncates toward 0 — fine for relative deltas.
+        ox_w = ox >> 16
+        oy_w = oy >> 16
+        dx_w = dx >> 16
+        dy_w = dy >> 16
+        cone_r_sq = cone_radius * cone_radius
+
+        for pid, p in self.game_players.items():
+            if pid == shooter_pid: continue
+            if not p.alive: continue
+            # Find the historical position closest to target_tick.
+            # Walk newest→oldest; keep the entry whose tick <= target,
+            # else fall back to the eldest available (deque was
+            # shorter than rewind_ticks early in the match).
+            tx, ty, tz = p.x, p.y, p.z
+            if p.pos_history:
+                tx, ty, tz = p.pos_history[0][1], p.pos_history[0][2], p.pos_history[0][3]
+                for entry in reversed(p.pos_history):
+                    if entry[0] <= target_tick:
+                        tx, ty, tz = entry[1], entry[2], entry[3]
+                        break
+            tx_w = tx >> 16
+            ty_w = ty >> 16
+            # Vector from bullet origin to (rewound) target
+            to_x = tx_w - ox_w
+            to_y = ty_w - oy_w
+            dist_sq = to_x * to_x + to_y * to_y
+            if dist_sq > cone_r_sq:
+                continue
+            # Forward-cone test: dot product of (to_target) with bullet
+            # direction must be > 0 (target ahead of barrel, not behind).
+            # Includes equal-position case (dist≈0, dot=0) → still hit
+            # (point-blank-on-top-of-target).
+            if dist_sq > 0:
+                dot = to_x * dx_w + to_y * dy_w
+                if dot < 0:
+                    continue
+            # === HIT ===
+            new_hp = max(0, p.hp - damage)
+            p.hp = new_hp
+            self._broadcast(build_damage(pid, shooter_pid, damage, new_hp))
+            log.info("LAG-COMP HIT: shooter=%d → victim=%d hp %d→%d "
+                     "(rewound %d ticks, dist²=%d/%d)",
+                     shooter_pid, pid, p.hp + damage, new_hp,
+                     rewind_ticks, dist_sq, cone_r_sq)
+            if new_hp == 0:
+                p.alive = False
+                p.deaths += 1
+                # Bump shooter's kill count (same client-attribution
+                # approach used elsewhere — server treats the shot
+                # source as the killer).
+                shooter = self.game_players.get(shooter_pid)
+                if shooter:
+                    shooter.kills += 1
+                self._broadcast(build_player_kill(pid, shooter_pid))
+                self._broadcast(build_score_update(
+                    pid, p.kills, p.deaths, max(p.hp, 0)))
+                if shooter:
+                    self._broadcast(build_score_update(
+                        shooter_pid, shooter.kills, shooter.deaths,
+                        max(shooter.hp, 0)))
+            return True
+        return False
+
     def _tick_match(self, dt: float):
         if self.match is None or self.match.game_over:
             return
+
+        # Advance the lag-comp rewind clock. Must run BEFORE position
+        # snapshotting so the deque entries are stamped with the tick
+        # whose state they represent.
+        self.match.server_tick += 1
+
+        # Snapshot every player's position into their pos_history deque
+        # for lag-compensated bullet validation. Keep the latest 30 ticks
+        # = 1.5 s of history at SERVER_TICK_RATE=20 — comfortably covers
+        # worst-case (modem + bridge + server tick) one-way of ~150 ms
+        # plus the 100 ms client interpolation lag the shooter saw.
+        for pid, p in self.game_players.items():
+            p.pos_history.append((self.match.server_tick, p.x, p.y, p.z))
 
         self.match.match_seconds_left = max(
             0, self.match.match_seconds_total
@@ -1366,7 +1487,14 @@ class UtenyaaServer:
             if p:
                 p.x, p.y, p.z, p.dx, p.dy, p.dz = x, y, z, dx, dy, dz
                 p.angle = angle
-                p.hp = hp
+                # HP is server-authoritative under UNETv2 lag-comp:
+                # only ACCEPT downward changes from the client (victim's
+                # local sim can register damage we missed) but never
+                # let a stale client value clobber a fresh server-applied
+                # damage. Without this, the lag-comp _broadcast(DAMAGE)
+                # was being undone the very next PLAYER_STATE arrival.
+                if hp < p.hp:
+                    p.hp = hp
             # No immediate relay anymore — the per-pid PLAYER_SYNC tick
             # loop in _tick_match handles broadcast at SERVER_TICK_RATE
             # (20 Hz) with idle gating + 1s keyframe. Eliminates the
@@ -1378,6 +1506,27 @@ class UtenyaaServer:
             x, y, z, dx, dy, dz = struct.unpack("!iiiiii", payload[1:25])
             eid = self.match.alloc_entity_id()
             self._broadcast(build_bullet_spawn(eid, c.game_pid, x, y, z, dx, dy, dz))
+            # === Lag-compensated point-blank validation ===
+            # The shooter sees remote tanks at "now - ~100ms" (interp
+            # buffer) and we add ~50ms modem one-way. Rewind targets to
+            # ~3 ticks ago (150ms @ 20 Hz) — a position they had on the
+            # shooter's screen at fire time. Cone-check vs each rewound
+            # target; on point-blank match (≤8 world-unit cone, dot>0),
+            # apply damage server-authoritatively and broadcast DAMAGE.
+            # The bullet entity still travels normally for cosmetic
+            # purposes, and victim's local bullet sim still runs — but
+            # the authoritative HP delta is set HERE so it can't be
+            # missed by network glitches.
+            if c.game_pid != 0xFF:
+                # cone_radius=12: matches the client's online padded
+                # hitbox (Player::Size 4 + NET pad 6 = 10) plus 2 units
+                # of rewind-mismatch slop. Smaller than 10 misses hits
+                # the victim's local sim would still register; larger
+                # creates "hit-claimy" feeling.
+                self._lag_comp_bullet_check(c.game_pid, x, y, z, dx, dy, dz,
+                                            rewind_ticks=3,
+                                            cone_radius=12,
+                                            damage=BULLET_DAMAGE)
         elif op == UNET_CLIENT_DROP_MINE and len(payload) >= 1 + 12:
             if self.match is None: return
             x, y, z = struct.unpack("!iii", payload[1:13])
