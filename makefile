@@ -3,7 +3,11 @@ COMPILER_DIR=Compiler
 
 CMNDIR = $(COMPILER_DIR)/COMMON
 IPFILE = $(CMNDIR)/IP.BIN
-LDFILE = $(CMNDIR)/sgl.linker
+# Use local linker script that explicitly collects .bss.*/.data.* orphans
+# (upstream sgl.linker only has *(.bss), causing inline-static template
+# member sections to overlap the malloc pool's address range — confirmed
+# root cause of the LOBBY → GAMEPLAY transition crash)
+LDFILE = utenyaa.linker
 
 BUILD_ELF = build.elf
 BUILD_ISO = $(BUILD_ELF:.elf=.iso)

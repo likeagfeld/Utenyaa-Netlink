@@ -1,0 +1,72 @@
+/*
+ * utenyaa.linker — fixed copy of joengine's sgl.linker
+ *
+ * Bug in upstream sgl.linker: it collects only `*(.bss)`, `*(.data)`,
+ * `*(.rodata)` — the unsuffixed sections. C++ inline-static template
+ * members and COMDAT-eligible statics live in `.bss._ZN...` /
+ * `.data._ZN...` sections; the original script never claims them, so
+ * GNU ld places them as ORPHANS at addresses that can OVERLAP the
+ * plain `.bss` already-allocated space (verified in this project:
+ * `_global_memory.6` (the 250 KB jo_malloc pool) at 0x060458e4 and
+ * `__ZN15TrackableObjectI11IRenderableE7objectsE` placed at
+ * 0x060460d0 — 2 KB inside the pool). Result: the second
+ * push_back during World construction corrupts pool block headers
+ * and jo_malloc's block walk infinite-loops.
+ *
+ * Fix: explicitly collect every `.bss.*`, `.data.*`, `.rodata.*`,
+ * and `.text.*` subsection so orphan placement isn't required.
+ */
+
+OUTPUT_FORMAT(coff-sh)
+SECTIONS {
+    SLSTART 0x06004000 : {
+        ___Start = .;
+        *(SLSTART)
+    }
+    .text ALIGN(0x20) :
+    {
+        *(.text)
+        *(.text.*)
+        *(.strings)
+        *("SEGA_P")
+
+        *(.eh_frame_hdr)
+        *(.eh_frame)
+        __etext = .;
+    }
+
+    SLPROG ALIGN(0x20): {
+        __slprog_start = .;
+        *(SLPROG)
+        __slprog_end = .;
+    }
+    .tors  ALIGN(0x10) :
+    {
+        ___ctors = . ;
+        *(.ctors)
+        ___ctors_end = . ;
+        ___dtors = . ;
+        *(.dtors)
+        ___dtors_end = . ;
+    }
+    .data ALIGN(0x10):
+    {
+        *(.data)
+        *(.data.*)
+        __edata = . ;
+    }
+    .rodata ALIGN(0x20) :
+    {
+        *(.rodata)
+        *(.rodata.*)
+    }
+    .bss ALIGN(0x10) (NOLOAD):
+    {
+        __bstart = . ;
+        *(.bss)
+        *(.bss.*)
+        *(COMMON)
+        __bend = . ;
+    _end = .;
+    }
+}

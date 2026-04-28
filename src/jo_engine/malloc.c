@@ -80,6 +80,15 @@ void	                *jo_malloc_with_behaviour(unsigned int n, const jo_malloc_b
     int        zone;
     jo_memory_block     *block;
 
+    /* Trace gate: only log when explicitly enabled by the gameplay-
+     * startup path so boot-time allocations don't flood the UART. The
+     * flag is g_TO_trace; declared as unsigned char in extern decl
+     * because C++ bool / C _Bool ABI parity is sketchy on cross-TU
+     * linkage. main.cxx defines `bool g_TO_trace` which the linker
+     * unifies with this byte (sizeof(bool) == 1 on SH-2 ELF). */
+    extern unsigned char g_TO_trace;
+    if (g_TO_trace) unet_send_dbg_log("MAL_enter");
+
 #ifdef JO_DEBUG
     if (n == 0)
     {
@@ -135,10 +144,12 @@ malloc_new_segment:
         if (behaviour != JO_FAST_ALLOCATION)
             goto malloc_new_segment;
     }
+    if (g_TO_trace) unet_send_dbg_log("MAL_NULL");
     return (JO_NULL);
 malloc_new_block:
     block->zone = zone;
     block->size = n;
+    if (g_TO_trace) unet_send_dbg_log("MAL_ok");
     return (block + 1);
 }
 

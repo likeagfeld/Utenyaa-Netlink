@@ -16,6 +16,13 @@
 #include "utenyaa_online_bridge.hpp"
 #include "Entities/Player.hpp"
 
+/* Diagnostic gate: when true, TrackableObject::TrackableObject() emits
+ * trace lines via unet_send_dbg_log so we can localise WHERE in the
+ * gameplay-startup base-class chain the SH-2 hangs. Set true right
+ * before `new Entities::World(...)`, never cleared (we'll see the flood
+ * if it ever runs the World ctor through). */
+bool g_TO_trace = false;
+
 /* === C-linkage shims so the C lobby/screen code can read C++ engine
  *     state (sprite slots, character counts) without including C++. === */
 extern "C" int unet_glue_num_characters(void)
@@ -206,11 +213,52 @@ int main()
 
 			if (worldPtr == nullptr)
 			{
-				if (g_Game.isOnlineMode) unet_send_dbg_log("CP_pre_World_new");
+				if (g_Game.isOnlineMode)
+				{
+					/* Report jo_engine pool usage% + sprite usage% right
+					 * before the World allocation. If usage is already
+					 * 90+% the World/Map alloc is what's failing — pool
+					 * exhaustion is the cause of the silent crash. */
+					char m[40] = "CP_pre_World mem= % spr= %";
+					int mu = jo_memory_usage_percent();
+					int su = jo_sprite_usage_percent();
+					m[12] = '0' + ((mu / 100) % 10);
+					m[13] = '0' + ((mu / 10) % 10);
+					m[14] = '0' + (mu % 10);
+					m[15] = '%';
+					m[16] = ' ';
+					m[17] = 's';
+					m[18] = 'p';
+					m[19] = 'r';
+					m[20] = '=';
+					m[21] = '0' + ((su / 100) % 10);
+					m[22] = '0' + ((su / 10) % 10);
+					m[23] = '0' + (su % 10);
+					m[24] = '%';
+					m[25] = '\0';
+					unet_send_dbg_log(m);
+				}
 				Settings::GameEnded = false;
 				startTime = Fxp::FromInt(Settings::TotalSeconds);
+				g_TO_trace = true;   /* enable per-TrackableObject ctor tracing */
 				worldPtr = new Entities::World(Settings::StageFiles[Settings::SelectedStage]);
-				if (g_Game.isOnlineMode) unet_send_dbg_log("CP_post_World_new");
+				g_TO_trace = false;  /* stop flooding once construction is done */
+				if (g_Game.isOnlineMode)
+				{
+					/* If we reach here, allocation + ctor returned. Send
+					 * the resulting pointer value — NULL means the ctor
+					 * ran on a null this (operator new failed). */
+					char m[40] = "CP_post_World ptr=00000000";
+					unsigned int p = (unsigned int)worldPtr;
+					int i;
+					for (i = 7; i >= 0; i--) {
+						unsigned d = p & 0xF;
+						m[18 + i] = (char)((d < 10) ? ('0' + d) : ('A' + d - 10));
+						p >>= 4;
+					}
+					m[26] = '\0';
+					unet_send_dbg_log(m);
+				}
 				PoneSound::CD::Play(3, 3, true);
 				if (g_Game.isOnlineMode) unet_send_dbg_log("CP_post_CD_Play");
 			}
