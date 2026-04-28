@@ -149,27 +149,15 @@ int main()
 			continue;
 		}
 
-		// During online GAMEPLAY we must NOT run the offline menu — it
-		// renders text on NBG0 every frame and consumes pad input via
-		// edge-detected presses (ProcessInput). Even with ProcessInput
-		// gated by !Settings::IsActive there's a single-frame race on
-		// the LOBBY→GAMEPLAY transition where IsActive is still false
-		// and a held A/START would walk the offline menu's Intro screen.
-		//
-		// The previous "skip menu entirely" attempt black-screened
-		// because menu.Update is the ONLY caller of jo_clear_screen on
-		// this path — without it, NBG0 + VDP1 framebuffer state from
-		// the prior lobby render persists. Replicate just the side
-		// effect (jo_clear_screen) and skip the rest.
+		// menu.Update has side effects beyond rendering (jo_clear_screen,
+		// state transitions on the GameEnd/Pause screens) that gameplay
+		// relies on for a clean NBG0. Skipping it entirely produces a
+		// black screen during online gameplay. Instead, the START→pause
+		// logic inside menu.Update is gated on !isOnlineMode (see
+		// Menu.hpp:204) so the user's still-held START from the lobby
+		// can no longer pause the freshly-started online match.
 		static UI::Menu menu;
-		if (g_Game.isOnlineMode && g_Game.gameState == UGAME_STATE_GAMEPLAY)
-		{
-			jo_clear_screen();
-		}
-		else
-		{
-			menu.Update();
-		}
+		menu.Update();
 
 		if (Settings::Quit && worldPtr)
 		{
@@ -316,16 +304,6 @@ int main()
 			Helpers::ShowLogo();
 		}
 
-		// Tiny diag strip kept SHORT (under jo_printf's 64-byte buffer).
-		// Earlier 7-arg variant could approach the limit; this stays well
-		// under. Only fires online so offline play is unaffected.
-		if (g_Game.isOnlineMode)
-		{
-			jo_printf(0, 27, "gs%d a%d w%d   ",
-				(int)g_Game.gameState,
-				Settings::IsActive ? 1 : 0,
-				worldPtr ? 1 : 0);
-		}
 
 		slSynch();
 	}

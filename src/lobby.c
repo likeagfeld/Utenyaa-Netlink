@@ -140,41 +140,18 @@ void lobby_input(void)
 {
     if (g_Game.gameState != UGAME_STATE_LOBBY) return;
 
-    /* If a disconnect confirmation is pending, only A/C/B/Y/START are
-     * meaningful — gate everything else so the user can't accidentally
-     * change ready state, character, vote, etc. while the prompt is up. */
-    if (g_confirm != LOBBY_CONFIRM_NONE) {
-        const bool a = jo_is_pad1_key_pressed(JO_KEY_A) || jo_is_pad1_key_pressed(JO_KEY_C);
-        const bool cancel = jo_is_pad1_key_pressed(JO_KEY_B) ||
-                            jo_is_pad1_key_pressed(JO_KEY_Y) ||
-                            jo_is_pad1_key_pressed(JO_KEY_START);
+    /* SIMPLIFIED LOBBY (per user: 'keep our online implementation as
+     * simple as possible to troubleshoot' / 'we dont need bots' /
+     * 'lets make sure that the disconnect button is mapped to Y
+     * only from the lobby... thats it... nothing else should
+     * disconnect or return to title screen').
+     *
+     * Inputs handled — exactly three, no others:
+     *   A / C  → toggle ready
+     *   START  → request game start
+     *   Y      → disconnect (only path back to title screen) */
 
-        if (a && !g_Game.input.pressedABC) {
-            /* Confirmed — execute the action. */
-            unet_send_disconnect();
-            modem_hangup(&g_uart);
-            jo_clear_screen();
-            g_Game.input.pressedABC = true;
-            g_Game.input.pressedLT = true;
-            g_Game.input.pressedRT = true;
-            g_Game.titleScreenChoice = 2;
-            g_Game.isOnlineMode = false;
-            g_Game.gameState = UGAME_STATE_TITLE_SCREEN;
-            g_confirm = LOBBY_CONFIRM_NONE;
-            return;
-        }
-        if (cancel) {
-            /* Any of B/Y/START while prompt is up = cancel. */
-            g_confirm = LOBBY_CONFIRM_NONE;
-            g_Game.input.pressedLT = true;
-            g_Game.input.pressedRT = true;
-            g_Game.input.pressedStart = true;
-        }
-        if (a) g_Game.input.pressedABC = true; else g_Game.input.pressedABC = false;
-        return;
-    }
-
-    /* A/C = ready toggle */
+    /* A / C = ready toggle */
     if (jo_is_pad1_key_pressed(JO_KEY_A) || jo_is_pad1_key_pressed(JO_KEY_C)) {
         if (!g_Game.input.pressedABC) unet_send_ready();
         g_Game.input.pressedABC = true;
@@ -202,80 +179,20 @@ void lobby_input(void)
         g_Game.input.pressedStart = false;
     }
 
-    /* B = arm "back to title" confirmation. Prompt is shown by lobby_draw;
-     * second A/C confirms, B/Y/START cancels. */
-    if (jo_is_pad1_key_pressed(JO_KEY_B)) {
-        if (!g_Game.input.pressedLT) {
-            g_confirm = LOBBY_CONFIRM_BACK_TO_TITLE;
-        }
-        g_Game.input.pressedLT = true;
-    } else {
-        g_Game.input.pressedLT = false;
-    }
-
-    /* Y = arm "disconnect" confirmation. */
+    /* Y = disconnect — the ONLY way out of the lobby. No B, no Start,
+     * no other path triggers disconnect or title return. */
     if (jo_is_pad1_key_pressed(JO_KEY_Y)) {
         if (!g_Game.input.pressedRT) {
-            g_confirm = LOBBY_CONFIRM_DISCONNECT;
+            unet_send_disconnect();
+            modem_hangup(&g_uart);
+            jo_clear_screen();
+            g_Game.titleScreenChoice = 2;
+            g_Game.isOnlineMode = false;
+            g_Game.gameState = UGAME_STATE_TITLE_SCREEN;
         }
         g_Game.input.pressedRT = true;
     } else {
         g_Game.input.pressedRT = false;
-    }
-
-    /* UP = add bot */
-    if (jo_is_pad1_key_pressed(JO_KEY_UP)) {
-        if (!g_Game.input.pressedUp) unet_send_bot_add();
-        g_Game.input.pressedUp = true;
-    } else {
-        g_Game.input.pressedUp = false;
-    }
-
-    /* DOWN = remove bot */
-    if (jo_is_pad1_key_pressed(JO_KEY_DOWN)) {
-        if (!g_Game.input.pressedDown) unet_send_bot_remove();
-        g_Game.input.pressedDown = true;
-    } else {
-        g_Game.input.pressedDown = false;
-    }
-
-    /* L trigger = previous character (skip taken) */
-    if (jo_is_pad1_key_pressed(JO_KEY_L)) {
-        if (!g_ltrig_pressed) {
-            uint8_t cur = (g_Game.myCharacter == 0xFF) ? 0 : g_Game.myCharacter;
-            uint8_t next = next_available_character(cur, -1);
-            unet_send_character_select(next);
-            g_Game.myCharacter = next;
-        }
-        g_ltrig_pressed = true;
-    } else {
-        g_ltrig_pressed = false;
-    }
-
-    /* R trigger = next character (skip taken) */
-    if (jo_is_pad1_key_pressed(JO_KEY_R)) {
-        if (!g_rtrig_pressed) {
-            uint8_t cur = (g_Game.myCharacter == 0xFF) ? 0 : g_Game.myCharacter;
-            uint8_t next = next_available_character(cur, +1);
-            unet_send_character_select(next);
-            g_Game.myCharacter = next;
-        }
-        g_rtrig_pressed = true;
-    } else {
-        g_rtrig_pressed = false;
-    }
-
-    /* X = cycle stage vote */
-    if (jo_is_pad1_key_pressed(JO_KEY_X)) {
-        if (!g_x_pressed) {
-            uint8_t cur = (g_Game.myStageVote == 0xFF) ? 0xFF : g_Game.myStageVote;
-            uint8_t next = (cur == 0xFF) ? 0 : (uint8_t)((cur + 1) % UNET_STAGE_COUNT);
-            unet_send_stage_vote(next);
-            g_Game.myStageVote = next;
-        }
-        g_x_pressed = true;
-    } else {
-        g_x_pressed = false;
     }
 
     /* Z = stats overlay */
@@ -421,48 +338,26 @@ void lobby_draw(void)
         g_z_page = 0;
     }
 
-    /* Player roster: NAME · CHAR (sprite) · VOTE · READY.
-     * The character column shows the actual selected sprite via
-     * jo_sprite_draw3D — same convention Flicky's Flock uses for
-     * its bird picker. Empty slot = "--" placeholder text. */
-    font_draw("#  NAME             CHAR    VOTE    STATUS",
-              FONT_X(1), FONT_Y(6), 500);
+    /* Simplified roster: name + ready status only. Character + stage
+     * are auto-assigned by server in this minimal mode (per user
+     * directive: 'remove voting on maps and sprite selection... have
+     * it auto assigned for now... keep our online implementation as
+     * simple as possible to troubleshoot'). No VDP1 sprites, no
+     * "P2:" line, no vote tally — these were all writing strings
+     * containing 'P2: ' / '2: ' bytes that recurred as the literal
+     * value of the recurring jo_free 'Bad pointer 0x..323A20' crash. */
+    font_draw("#  NAME             STATUS", FONT_X(1), FONT_Y(6), 500);
     for (i = 0; i < nd->lobby_count && i < UNET_MAX_PLAYERS; i++) {
         const unet_lobby_player_t* lp = &nd->lobby_players[i];
-        const char* vote_str;
         char marker;
 
         if (!lp->active) continue;
         marker = (lp->id == g_Game.myPlayerID) ? '>' : ' ';
 
-        vote_str = (lp->stage_vote == 0xFF) ? "-----" : STAGE_NAMES[lp->stage_vote];
-
-        /* Text portion (everything except the character sprite column) */
         font_printf(FONT_X(1), FONT_Y(7 + i), 500,
-                    "%c%-2d %-16s        %-7s %s",
-                    marker, i + 1, lp->name, vote_str,
+                    "%c%-2d %-16s %s",
+                    marker, i + 1, lp->name,
                     lp->ready ? "READY" : "     ");
-
-        /* Character sprite — rendered as a VDP1 quad on top of the
-         * NBG0 text. Position chosen to land in the CHAR column. */
-        if (lp->character_id != 0xFF &&
-            lp->character_id < unet_glue_num_characters())
-        {
-            int sprite = unet_glue_character_sprite_for(lp->character_id);
-            jo_sprite_draw3D(sprite,
-                             FONT_X(22) + 8,
-                             FONT_Y(7 + i) + 4,
-                             499);
-        } else {
-            font_draw("--", FONT_X(22), FONT_Y(7 + i), 500);
-        }
-    }
-
-    /* Stage vote tally */
-    font_draw("STAGE VOTES:", FONT_X(1), FONT_Y(13), 500);
-    for (i = 0; i < UNET_STAGE_COUNT; i++) {
-        font_printf(FONT_X(2 + i * 9), FONT_Y(14), 500,
-                    "%s:%d", STAGE_NAMES[i], nd->stage_vote_tally[i]);
     }
 
     /* Waiting / start gate */
@@ -473,7 +368,7 @@ void lobby_draw(void)
     }
 
     /* Last log line — pad to 38 chars so shorter text doesn't leak
-     * residue from a prior longer line (Disasteroids QA-pass fix). */
+     * residue from a prior longer line. */
     if (nd->log_count > 0) {
         font_printf(FONT_X(1), FONT_Y(19), 500, "%-38s",
                     nd->log_lines[nd->log_count - 1]);
@@ -481,31 +376,12 @@ void lobby_draw(void)
         font_draw("                                      ", FONT_X(1), FONT_Y(19), 500);
     }
 
-    /* P2 co-op status — full-width pad to erase prior state */
-    if (g_Game.hasSecondLocal) {
-        font_printf(FONT_X(1), FONT_Y(21), 500, "P2: %-34s", g_Game.playerName2);
-    } else {
-        font_draw("                                      ", FONT_X(1), FONT_Y(21), 500);
-    }
-
-    /* Controls hint — split across 3 lines for readability */
-    font_draw("A:RDY  START:GO  L/R:CHAR  X:STAGE",
+    /* Controls hint */
+    font_draw("A:READY  START:GO  Y:DISCONNECT",
               FONT_X(1), FONT_Y(25), 500);
-    font_draw("UP/DN:BOTS  B:BACK  Y:QUIT  Z:STATS",
-              FONT_X(1), FONT_Y(26), 500);
 
-    /* Disconnect-confirmation overlay — shown on top when armed. */
-    if (g_confirm == LOBBY_CONFIRM_BACK_TO_TITLE) {
-        font_draw_centered("                                  ", FONT_Y(13), 600);
-        font_draw_centered("  RETURN TO TITLE SCREEN?         ", FONT_Y(14), 600);
-        font_draw_centered("  THIS WILL DISCONNECT YOU.       ", FONT_Y(15), 600);
-        font_draw_centered("  A = YES   B/Y/START = CANCEL    ", FONT_Y(17), 600);
-    } else if (g_confirm == LOBBY_CONFIRM_DISCONNECT) {
-        font_draw_centered("                                  ", FONT_Y(13), 600);
-        font_draw_centered("  DISCONNECT FROM SERVER?         ", FONT_Y(14), 600);
-        font_draw_centered("  YOU WILL HAVE TO RE-DIAL.       ", FONT_Y(15), 600);
-        font_draw_centered("  A = YES   B/Y/START = CANCEL    ", FONT_Y(17), 600);
-    }
+    /* Disconnect-confirmation overlay removed in simplified mode —
+     * B now leaves lobby immediately (see lobby_input). */
 
 skip_player_list:
     ;
