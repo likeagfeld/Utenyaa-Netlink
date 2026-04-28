@@ -323,14 +323,29 @@ void lobby_draw(void)
      * mid-display and causes the visible strobe on the "UTENYAA LOBBY"
      * title and other text rows. Instead, every text write below uses
      * a fixed-width format (e.g. "%-16s") so old characters are
-     * overwritten in place. The lobby is cleared once at lobby_init()
-     * (transition into the screen). Same fix is applied to the
-     * gameplay path's HUD writes — nothing clears NBG0 after World
-     * ctor's initial clear. */
+     * overwritten in place. ONE jo_clear_screen() runs only on the
+     * Z-toggle transition (lobby ↔ leaderboard) so the two views
+     * don't overlay each other. */
+    if (g_z_held != g_z_was_held) {
+        jo_clear_screen();
+    }
+
+    /* Z held: replace the entire lobby render with the leaderboard
+     * overlay (no header, no roster, no controls — just the board). */
+    if (g_z_held) {
+        draw_z_overlay(nd);
+        g_z_was_held = true;
+        goto skip_player_list;
+    } else if (g_z_was_held) {
+        /* Z just released — reset paging state for next time. */
+        g_z_was_held = false;
+        g_z_page_timer = 0;
+        g_z_page = 0;
+    }
 
     font_draw_centered("UTENYAA LOBBY", FONT_Y(2), 500);
     font_printf(FONT_X(1), FONT_Y(4), 500,
-                "PLAYERS: %d/%d (first 4 ready play next match)",
+                "PLAYERS: %d/%d   FIRST 4 READY PLAY ",
                 nd->lobby_count, UNET_MAX_LOBBY);
 
     /* Persistent WINNER banner — shows after a match ends, stays
@@ -349,16 +364,6 @@ void lobby_draw(void)
     {
         font_draw("                                      ",
                   FONT_X(1), FONT_Y(5), 500);
-    }
-
-    if (g_z_held) {
-        draw_z_overlay(nd);
-        g_z_was_held = true;
-        goto skip_player_list;
-    } else if (g_z_was_held) {
-        g_z_was_held = false;
-        g_z_page_timer = 0;
-        g_z_page = 0;
     }
 
     /* Simplified roster: name + ready status only. Character + stage

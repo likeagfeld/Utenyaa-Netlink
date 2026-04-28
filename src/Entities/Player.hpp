@@ -186,7 +186,7 @@ namespace Entities
 			if (g_Game.isOnlineMode && g_Game.gameState == UGAME_STATE_GAMEPLAY)
 			{
 				if ((uint8_t)this->controller == g_Game.myPlayerID)
-					physPort = Helpers::GetNthAvailableController(0);
+					physPort = Helpers::GetLocalP1Port();
 				else if (g_Game.hasSecondLocal && (uint8_t)this->controller == g_Game.myPlayerID2)
 					physPort = Helpers::GetNthAvailableController(1);
 			}

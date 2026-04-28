@@ -36,6 +36,26 @@ public:
 		return -1;
 	}
 
+	/** @brief Returns the physical port the LOCAL P1 player should read
+	 *  from in online mode. Prefers a Saturn 3D Control Pad in analog
+	 *  mode (peripheral ID 0x16) on ANY connected port — supports the
+	 *  common "3D pad in P2 + nothing in P1" config as well as the
+	 *  "digital in P1 + 3D pad in P2 (solo)" config that would otherwise
+	 *  leave the 3D pad idle. Falls back to the first available port.
+	 *  Co-op P2 explicitly uses GetNthAvailableController(1).
+	 */
+	inline static int GetLocalP1Port()
+	{
+		if (Smpc_Peripheral)
+		{
+			for (int port = 0; port < JO_INPUT_MAX_DEVICE; port++)
+			{
+				if (Smpc_Peripheral[port].id == 0x16) return port;
+			}
+		}
+		return Helpers::GetNthAvailableController(0);
+	}
+
 	/** @brief Is controller button pressed
 	 * @param controller Controller number
 	 * @param key Controller button
@@ -51,7 +71,7 @@ public:
 		{
 			if ((uint8_t)controller == g_Game.myPlayerID)
 			{
-				int port = Helpers::GetNthAvailableController(0);
+				int port = Helpers::GetLocalP1Port();
 				return (port >= 0) && jo_is_input_key_pressed(port, key);
 			}
 			if (g_Game.hasSecondLocal && (uint8_t)controller == g_Game.myPlayerID2)
@@ -83,7 +103,7 @@ public:
 		{
 			if ((uint8_t)controller == g_Game.myPlayerID)
 			{
-				int port = Helpers::GetNthAvailableController(0);
+				int port = Helpers::GetLocalP1Port();
 				return (port >= 0) && jo_is_input_key_down(port, key);
 			}
 			if (g_Game.hasSecondLocal && (uint8_t)controller == g_Game.myPlayerID2)

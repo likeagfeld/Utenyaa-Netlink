@@ -248,23 +248,13 @@ int main()
 			// Match-end countdown. Also: follow-winner spectator aim.
 			OnlineBridge::TickMatchEndPause();
 
-			if (g_Game.isOnlineMode && OnlineBridge::LocalIsDeadSpectator())
-			{
-				uint8_t tgt = OnlineBridge::GetSpectatorTargetPid();
-				if (tgt != 0xFF)
-				{
-					for (auto* obj : TrackableObject<Entities::Player>::objects)
-					{
-						if ((uint8_t)obj->GetController() == tgt)
-						{
-							const Vec3& tp = obj->GetPosition();
-							jo_3d_camera_set_target(&camera,
-								tp.x.Value() >> 16, tp.y.Value() >> 16, 0);
-							break;
-						}
-					}
-				}
-			}
+			/* Spectator-follow camera removed per user directive: when
+			 * a player dies, leave the camera at the default whole-
+			 * map view instead of tracking the leader. The default
+			 * jo_3d_camera_set_target(0, 30, 0) (set once in main()
+			 * init) shows the whole arena, which the user wants for
+			 * watching the rest of the round play out from a fixed
+			 * angle. */
 
 			jo_3d_camera_look_at(&camera);
 			jo_3d_push_matrix();
