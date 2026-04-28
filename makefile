@@ -70,7 +70,7 @@ ASSETS_DIR=./cd
 	sh2eb-elf-g++.exe $< $(CCFLAGS) -std=gnu++23 -fpermissive -fno-exceptions -fno-rtti -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-threadsafe-statics -fno-use-cxa-atexit -o $@
 
 compile_objects : $(OBJECTS)
-	sh2eb-elf-gcc.exe $(LDFLAGS) $(SYSOBJECTS) $(OBJECTS) $(LIBS) -o $(BUILD_ELF)
+	sh2eb-elf-gcc.exe $(LDFLAGS) $(SYSOBJECTS) $(OBJECTS) $(LIBS) $(EXTRA_TAIL_LIBS) -o $(BUILD_ELF)
 	
 convert_binary : compile_objects
 	sh2eb-elf-objcopy.exe -O binary $(BUILD_ELF) ./cd/0.bin
