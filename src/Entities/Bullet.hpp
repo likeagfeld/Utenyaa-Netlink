@@ -12,6 +12,8 @@
 #include "../Messages/Damage.hpp"
 #include "../Messages/QueryController.hpp"
 
+#include "../net/utenyaa_game.h"   /* g_Game.isOnlineMode for damage gating */
+
 #include "Explosion.hpp"
 
 namespace Entities
@@ -151,7 +153,19 @@ namespace Entities
 
 					if (query.Handled && query.Controller != this->origin)
 					{
-						collidesWith->HandleMessages(Messages::Damage(Bullet::Damage));
+						/* In online mode, HP is server-authoritative —
+						 * applying a local Damage message here would
+						 * stack on top of the server's lag-comp DAMAGE
+						 * broadcast and the next PLAYER_SYNC's authoritative
+						 * HP, causing visible double-tick on the victim's
+						 * HUD before reconciliation. Bullet still destroys
+						 * (visual hit + Explosion FX) but only the server
+						 * decrements HP. Offline keeps the legacy local
+                         * application so single-player damage works. */
+						if (!g_Game.isOnlineMode)
+						{
+							collidesWith->HandleMessages(Messages::Damage(Bullet::Damage));
+						}
 						destroyBullet = true;
 					}
 				}

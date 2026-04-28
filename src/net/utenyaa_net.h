@@ -110,7 +110,13 @@ typedef struct {
  * at 20Hz server tick = 4 entries; bumped to 6 to absorb 30Hz bursts
  * and modem jitter without dropping the eldest needed sample. */
 #define UNET_SNAP_HISTORY  6
-#define UNET_INTERP_LAG_FRAMES 5  /* render at "now - 5 frames" (~100ms @ 50fps) */
+/* Render lag in CLIENT FRAMES. At 50 fps PAL: 4 frames = 80 ms. Under
+ * the engine's slDynamicFrame(1) fallback (25 fps when polygon load
+ * spikes), 4 frames = 160 ms — still smooth, not yet rubbery. Was 5
+ * (200 ms under fallback, felt floaty). Server broadcasts at 20 Hz =
+ * 50 ms cadence, so 4-frame target buffer gives 1.6 snapshot intervals
+ * — comfortably brackets two server samples even with one-frame jitter. */
+#define UNET_INTERP_LAG_FRAMES 4
 
 typedef struct {
     unet_player_sync_t entries[UNET_SNAP_HISTORY];

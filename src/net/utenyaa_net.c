@@ -324,7 +324,13 @@ static void on_player_sync(const uint8_t* p, int len)
     snap.dz     = unet_d_vel((int8_t)p[9]);
     snap.angle  = unet_d_angle(p[10]);
     snap.health = (uint8_t)(p[11] & 0x0F);
-    snap.pickup = (uint8_t)((p[11] >> 4) & 0x0F);
+    {
+        /* Sentinel: server packs its 0xFF "no pickup" as 0x0F (high
+         * nibble of hp_pickup byte). Map back to 0 = None on the
+         * client side so HUD's `powerupType > 0` check stays correct. */
+        uint8_t pkraw = (uint8_t)((p[11] >> 4) & 0x0F);
+        snap.pickup = (pkraw == 0x0F) ? 0 : pkraw;
+    }
     snap.arrived_frame = g_net.local_frame;
     snap.valid  = true;
 

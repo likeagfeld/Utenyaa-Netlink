@@ -494,15 +494,17 @@ static bool fetch_interp_pose(const unet_snap_ring_t* ring,
 
     const unet_player_sync_t* en = &ring->entries[idx_new];
 
-    /* Snap-tier check: if positional Δ between bracketing snapshots is
-     * huge (>32 world units, ≈ a respawn or desync recovery), skip lerp
-     * and jump to newest. Avoids visible "stretching" across teleports. */
-    int32_t dxx = en->x - eo->x;
-    int32_t dyy = en->y - eo->y;
-    /* >> 16 to integer world units for the threshold compare. */
-    int32_t dxw = dxx >> 16; if (dxw < 0) dxw = -dxw;
-    int32_t dyw = dyy >> 16; if (dyw < 0) dyw = -dyw;
-    if (dxw > 32 || dyw > 32) {
+    /* Snap-tier check: if Euclidean distance between bracketing snapshots
+     * exceeds 32 world units (≈ a respawn or desync recovery), skip lerp
+     * and jump to newest. Distance² avoids the per-axis false positives
+     * the QA agent flagged: a (25, 25) Δ ≈ 35 unit hypotenuse passed
+     * each per-axis 32-unit gate but is well past the 32-unit threshold.
+     * Squared compare in int32 avoids a sqrt — well within fxp range
+     * (maximal arena diagonal ≈ 226 unit²ish). */
+    int32_t dxw = (en->x - eo->x) >> 16;
+    int32_t dyw = (en->y - eo->y) >> 16;
+    int32_t dist_sq = dxw * dxw + dyw * dyw;
+    if (dist_sq > 32 * 32) {
         *out_pos = fxp_vec(en->x, en->y, en->z);
         *out_vel = fxp_vec(en->dx, en->dy, en->dz);
         *out_angle = Fxp::BuildRaw((int32_t)en->angle << 8);

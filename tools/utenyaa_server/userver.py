@@ -72,6 +72,11 @@ MAX_CRATES = 16
 STAGE_COUNT = 4
 STAGE_NAMES = ["Island", "Cross", "Valley", "Railway"]
 HP_MAX = 6
+# UNETv2 PLAYER_SYNC packs HP into the low nibble of byte 11 (alongside
+# pickup in the high nibble). Anything > 15 silently wraps on the wire,
+# which would break damage tracking in nasty ways. Guard at startup so
+# a future HP_MAX bump can't ship without widening the wire field.
+assert HP_MAX <= 0x0F, "HP_MAX > 15 requires PLAYER_SYNC v2 hp field widen"
 # Damage per bullet hit. Mirrors C client's Entities::Bullet::Damage = 2
 # in src/Entities/Bullet.hpp. Used by the server-side lag-comp validator
 # so its damage assignment matches what the victim's local bullet sim
@@ -1305,6 +1310,15 @@ class UtenyaaServer:
         # 14.4 kbps Japanese modems with headroom for events.
         keyframe_interval = SERVER_TICK_RATE  # 20 ticks = 1.0s
         for pid, p in self.game_players.items():
+            # Skip dead players. _drop_client and CLIENT_DEATH set
+            # alive=False but leave (x,y,z) at last-known. Without this
+            # gate, the keyframe path keeps re-broadcasting the corpse's
+            # last position every 1s, leaving a still tank visible at
+            # the spot where the player vanished. Cosmetic but
+            # confusing. PLAYER_KILL was already broadcast separately
+            # so receivers know to stop rendering.
+            if not p.alive:
+                continue
             last = self._last_sync_state.get(pid)  # (q_tuple, ticks_since)
             ticks_since = (last[1] + 1) if last else (keyframe_interval + 1)
             # Compute the EXACT 9-tuple of values that go on the wire.
@@ -1487,14 +1501,17 @@ class UtenyaaServer:
             if p:
                 p.x, p.y, p.z, p.dx, p.dy, p.dz = x, y, z, dx, dy, dz
                 p.angle = angle
-                # HP is server-authoritative under UNETv2 lag-comp:
-                # only ACCEPT downward changes from the client (victim's
-                # local sim can register damage we missed) but never
-                # let a stale client value clobber a fresh server-applied
-                # damage. Without this, the lag-comp _broadcast(DAMAGE)
-                # was being undone the very next PLAYER_STATE arrival.
-                if hp < p.hp:
-                    p.hp = hp
+                # HP is FULLY server-authoritative under UNETv2:
+                #   - Damage applied by _lag_comp_bullet_check on FIRE_BULLET
+                #   - Heal applied by CLIENT_PICKUP_CRATE (PICKUP_HEALTH branch)
+                #   - Death finalized by CLIENT_DEATH (server sets hp=0,alive=False)
+                # Client's `hp` byte in PLAYER_STATE is IGNORED to prevent the
+                # round-trip where: server lag-comp sets p.hp=4 → broadcasts
+                # DAMAGE → next client PLAYER_STATE arrives with stale hp=6 →
+                # would otherwise clobber back to 6. The previous "downward
+                # only" gate also broke healing crates (heal raises HP), so
+                # ignoring the byte entirely is the only consistent rule.
+                # (void) hp -- intentionally unused.
             # No immediate relay anymore — the per-pid PLAYER_SYNC tick
             # loop in _tick_match handles broadcast at SERVER_TICK_RATE
             # (20 Hz) with idle gating + 1s keyframe. Eliminates the
