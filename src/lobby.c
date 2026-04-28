@@ -37,6 +37,7 @@ static bool g_z_held = false;
 static bool g_z_was_held = false;
 static int  g_z_page_timer = 0;
 static int  g_z_page = 0;
+static int  g_z_last_drawn_page = -1;  /* tracks which Z page rendered last frame; -1 = none */
 #define Z_PAGE_INTERVAL 180  /* 3s @ 60fps */
 
 static bool g_ltrig_pressed = false;
@@ -260,6 +261,17 @@ static void draw_z_overlay(const unet_state_data_t* nd)
         g_z_page = 1 - g_z_page;
     }
 
+    /* Effective page = the page actually about to render (page 0 falls
+     * back to leaderboard when no last-game results yet). Clear NBG0
+     * once on every page flip so the two views — different column
+     * widths, different X anchors, different row counts — never bleed
+     * into each other. */
+    int effective_page = (g_z_page == 0 && nd->has_last_results) ? 0 : 1;
+    if (effective_page != g_z_last_drawn_page) {
+        jo_clear_screen();
+        g_z_last_drawn_page = effective_page;
+    }
+
     if (g_z_page == 0 && nd->has_last_results) {
         /* Page 0: Last game results — full-word column headers. */
         font_draw_centered("LAST GAME RESULTS", FONT_Y(6), 500);
@@ -341,6 +353,7 @@ void lobby_draw(void)
         g_z_was_held = false;
         g_z_page_timer = 0;
         g_z_page = 0;
+        g_z_last_drawn_page = -1;
     }
 
     font_draw_centered("UTENYAA LOBBY", FONT_Y(2), 500);
