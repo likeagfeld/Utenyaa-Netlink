@@ -293,10 +293,30 @@ int main()
 				Settings::PlayerWon = winner + 1;
 				PoneSound::CD::Play(4, 4, false);
 			}
+			else if (g_Game.isOnlineMode)
+			{
+				/* Online: HUD timer is server-authoritative — pull
+				 * nd->match_seconds_left (uint16, server clamps to 0).
+				 * Local startTime is NOT decremented (avoids the
+				 * size_t-cast underflow that displayed "560 minutes"
+				 * after expiry). DrawGameplayOverlay also renders a
+				 * "TIME mm:ss" line at row 1 from the same server
+				 * source — kept consistent. */
+				const unet_state_data_t* nd = unet_get_data();
+				UI::HudHandler.HandleMessages(
+					UI::Messages::UpdateTime((size_t)nd->match_seconds_left));
+			}
 			else
 			{
-				UI::HudHandler.HandleMessages(UI::Messages::UpdateTime((startTime >> 16).Value()));
+				/* Offline path — local countdown clamped to 0 to avoid
+				 * size_t-cast underflow if a frame slips past zero. */
+				int t = (startTime > Fxp(0.0))
+					? (int)((startTime >> 16).Value())
+					: 0;
+				UI::HudHandler.HandleMessages(
+					UI::Messages::UpdateTime((size_t)t));
 				startTime -= Fxp::BuildRaw(delta_time);
+				if (startTime < Fxp(0.0)) startTime = Fxp(0.0);
 			}
 		}
 		else
