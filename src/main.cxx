@@ -220,13 +220,6 @@ int main()
 				startTime = Fxp::FromInt(Settings::TotalSeconds);
 				worldPtr = new Entities::World(Settings::StageFiles[Settings::SelectedStage]);
 				PoneSound::CD::Play(3, 3, true);
-				// Defensive: tell the server our stage is loaded. Server
-				// doesn't currently gate on this but the protocol opcode
-				// is wired (UNET_MSG_STAGE_LOADED_ACK 0x23). Sending it
-				// also drains any pending TX fifo / forces a UART poke
-				// right after the multi-frame CD load — making the
-				// post-World heartbeat path more robust.
-				if (g_Game.isOnlineMode) unet_send_stage_loaded_ack();
 			}
 			slUnitMatrix(0);
 
@@ -323,24 +316,15 @@ int main()
 			Helpers::ShowLogo();
 		}
 
-		// === ALPHA DEBUG STRIP ===
-		// On-screen state telemetry for diagnosing the LOBBY → GAMEPLAY
-		// transition. Visible only in online mode (no impact on offline
-		// title screen / offline play). Renders LAST so it overlays
-		// any other NBG0 text. Remove once online flow is verified.
-		// Format: "gs<gameState> us<unet_state> a<IsActive> w<worldNul>
-		//          op<lastOp> hb<heartbeats> rx<rxBytes>"
+		// Tiny diag strip kept SHORT (under jo_printf's 64-byte buffer).
+		// Earlier 7-arg variant could approach the limit; this stays well
+		// under. Only fires online so offline play is unaffected.
 		if (g_Game.isOnlineMode)
 		{
-			const unet_state_data_t* _nd = unet_get_data();
-			jo_printf(0, 27, "gs%d us%d a%d w%d op%02X hb%d rx%d        ",
+			jo_printf(0, 27, "gs%d a%d w%d   ",
 				(int)g_Game.gameState,
-				(int)unet_get_state(),
 				Settings::IsActive ? 1 : 0,
-				worldPtr ? 1 : 0,
-				(int)_nd->diag_last_op,
-				(int)_nd->diag_heartbeats_sent,
-				(int)_nd->diag_rx_bytes);
+				worldPtr ? 1 : 0);
 		}
 
 		slSynch();
