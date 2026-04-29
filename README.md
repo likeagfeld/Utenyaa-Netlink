@@ -41,11 +41,7 @@ TITLE → Play Online → Name Entry (backup RAM) → Connecting → Lobby
 | Button | Action |
 |---|---|
 | A / C  | Toggle ready |
-| L / R  | Cycle character (skips already-taken) |
-| X      | Cycle stage vote |
-| ↑ / ↓  | Add / remove bot |
 | START  | Request game start (needs 2+ total slots) |
-| B      | Back to title (stay connected for quick rejoin) |
 | Y      | Disconnect |
 | Z      | Hold — stats overlay (last-match results ↔ leaderboard) |
 
