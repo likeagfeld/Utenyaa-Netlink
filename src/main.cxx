@@ -223,9 +223,26 @@ int main()
 			&& !Settings::IsActive)
 		{
 			const unet_state_data_t* nd = unet_get_data();
+			/* DIAG: server-bound checkpoint trace. Server journal logs
+			 * each CLIENT_DBG receive with the sender's username so we
+			 * can see exactly how far a black-screening client got. */
+			unet_send_dbg_log("CKPT-A: gameplay-state-entered");
 			Settings::SelectedStage = nd->stage_id;
 			Settings::TotalSeconds = nd->match_seconds_total;
 			Settings::PlayerCount = nd->opponent_count;
+			{
+				char buf[40]; int n = 0;
+				const char* hdr = "CKPT-B stage=";
+				while (hdr[n]) { buf[n] = hdr[n]; n++; }
+				buf[n++] = '0' + ((int)nd->stage_id % 10);
+				buf[n++] = ' '; buf[n++] = 'P'; buf[n++] = 'C'; buf[n++] = '=';
+				if (nd->opponent_count >= 10) buf[n++] = '0' + ((nd->opponent_count / 10) % 10);
+				buf[n++] = '0' + (nd->opponent_count % 10);
+				buf[n++] = ' '; buf[n++] = 'P'; buf[n++] = '1'; buf[n++] = '=';
+				buf[n++] = '0' + ((g_Game.myPlayerID < 10) ? g_Game.myPlayerID : 9);
+				buf[n] = 0;
+				unet_send_dbg_log(buf);
+			}
 			jo_random_seed = nd->game_seed ? nd->game_seed : 1;
 			Settings::IsActive = true;
 		}
@@ -235,10 +252,13 @@ int main()
 
 			if (worldPtr == nullptr)
 			{
+				unet_send_dbg_log("CKPT-C pre-World-ctor");
 				Settings::GameEnded = false;
 				startTime = Fxp::FromInt(Settings::TotalSeconds);
 				worldPtr = new Entities::World(Settings::StageFiles[Settings::SelectedStage]);
+				unet_send_dbg_log("CKPT-D post-World-ctor");
 				PoneSound::CD::Play(3, 3, true);
+				unet_send_dbg_log("CKPT-E post-CD-Play (gameplay live)");
 			}
 			slUnitMatrix(0);
 
