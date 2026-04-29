@@ -437,6 +437,12 @@ class UtenyaaPlayer:
         self.is_bot = False
         self.last_input = 0
         self.sent_death = False
+        # True once the client has sent its first PLAYER_STATE (op 0x14).
+        # Until then, server's x/y/z are constructor defaults (0,0,0)
+        # which is the arena corner — broadcasting that as PLAYER_SYNC
+        # would warp the OTHER player's local view to the corner. Gate
+        # the broadcast on this so we only emit real positions.
+        self.state_received = False
         # Position history for lag-compensated bullet validation. deque
         # of (server_tick, x, y, z) tuples in fxp 16.16 raw. Sized to
         # cover the worst-case round-trip lag we want to compensate for:
@@ -1160,6 +1166,10 @@ class UtenyaaServer:
         for pid, p in self.game_players.items():
             if pid == shooter_pid: continue
             if not p.alive: continue
+            # Don't validate against players who haven't sent their first
+            # PLAYER_STATE — server has them at (0,0,0) which would yield
+            # a phantom point-blank hit at the arena corner.
+            if not p.state_received and not p.is_bot: continue
             # Find the historical position closest to target_tick.
             # Walk newest→oldest; keep the entry whose tick <= target,
             # else fall back to the eldest available (deque was
@@ -1318,6 +1328,12 @@ class UtenyaaServer:
             # confusing. PLAYER_KILL was already broadcast separately
             # so receivers know to stop rendering.
             if not p.alive:
+                continue
+            # Skip players who haven't sent their first PLAYER_STATE
+            # yet — server has them at constructor default (0,0,0).
+            # Bots are an exception: their position is server-driven
+            # by AI tick, so they always have a real position.
+            if not p.state_received and not p.is_bot:
                 continue
             last = self._last_sync_state.get(pid)  # (q_tuple, ticks_since)
             ticks_since = (last[1] + 1) if last else (keyframe_interval + 1)
@@ -1501,6 +1517,11 @@ class UtenyaaServer:
             if p:
                 p.x, p.y, p.z, p.dx, p.dy, p.dz = x, y, z, dx, dy, dz
                 p.angle = angle
+                # Mark this pid as having a real position now. The
+                # PLAYER_SYNC broadcast loop in _tick_match gates on
+                # this so peers don't see a (0,0,0) corner-warp before
+                # the player's first PLAYER_STATE arrives.
+                p.state_received = True
                 # HP is FULLY server-authoritative under UNETv2:
                 #   - Damage applied by _lag_comp_bullet_check on FIRE_BULLET
                 #   - Heal applied by CLIENT_PICKUP_CRATE (PICKUP_HEALTH branch)
