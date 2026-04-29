@@ -5,6 +5,7 @@
 #include "../Utils/LoaderUtil.hpp"
 #include "../Utils/std/vector.h"
 #include "../Interfaces/IColliding.hpp"
+#include "../net/utenyaa_net.h"   /* unet_send_dbg_log for Map-ctor checkpoints */
 
 /** @brief Game objects
  */
@@ -269,14 +270,17 @@ namespace Objects
 	 */
 	inline Map::Map(const char* file, int firstTerrainTexture)
 	{
+		unet_send_dbg_log("CKPT-M1 Map pre-fs-read");
 		// Load level data
 		char* stream = jo_fs_read_file_in_dir(file, JO_ROOT_DIR, NULL);
+		unet_send_dbg_log("CKPT-M2 Map post-fs-read");
 		if (!stream)
 		{
 			/* CD read failed (worn lens, bad sector, emulator quirk, OOM in
 			 * the file-system bounce buffer). Caller's defensive check on
 			 * EntityDefinitionsCount will catch this and abort World ctor
 			 * cleanly instead of dereferencing into garbage. */
+			unet_send_dbg_log("CKPT-M2X Map fs-read NULL");
 			this->EntityDefinitionsCount = 0;
 			this->EntityDefinitions = nullptr;
 			return;
@@ -286,6 +290,7 @@ namespace Objects
 
 		// Initialize mesh
 		this->mapMesh = Mesh3D((Map::MapDimensionSize + 1) * (Map::MapDimensionSize + 1), Map::MapDimensionSize * Map::MapDimensionSize);
+		unet_send_dbg_log("CKPT-M3 Map mesh-init");
 
 		this->Light.Direction = level->Sun.Direction;
 		this->Light.Color = level->Sun.Color;

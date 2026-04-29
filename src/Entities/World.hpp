@@ -22,6 +22,7 @@
 
 #include "../Utils/Debug.hpp"
 #include "../Utils/PakTextureLoader.hpp"
+#include "../Utils/ponesound/ponesound.hpp"   /* CD::Stop before Map load */
 
 #include "../net/utenyaa_net.h"   /* unet_send_dbg_log for World-ctor checkpoints */
 
@@ -48,6 +49,16 @@ namespace Entities
 		World(const char* name)
 		{
 			unet_send_dbg_log("CKPT-W1 World pre-Map");
+			/* Stop CD audio (track 2 lobby music is still playing) before
+			 * the Map's CD data read. The Saturn CD drive can only do one
+			 * thing at a time — competing audio streaming + data seeks on
+			 * a marginal lens stalls the data read indefinitely on some
+			 * hardware (TOAST playtest: hangs inside Map ctor with no
+			 * CKPT-W2 ever emitted, no W2X null-bail either → the
+			 * jo_fs_read_file_in_dir call simply doesn't return). Stopping
+			 * audio first frees the lens. The gameplay track is started
+			 * after World ctor returns. */
+			PoneSound::CD::Stop();
 			// Load map file
 			this->Map = new Objects::Map(name, Objects::Terrain::FirstGroundTextureIndex);
 			unet_send_dbg_log("CKPT-W2 World post-Map");
