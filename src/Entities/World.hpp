@@ -23,6 +23,8 @@
 #include "../Utils/Debug.hpp"
 #include "../Utils/PakTextureLoader.hpp"
 
+#include "../net/utenyaa_net.h"   /* unet_send_dbg_log for World-ctor checkpoints */
+
 
 namespace Entities
 {
@@ -45,13 +47,40 @@ namespace Entities
 		 */
 		World(const char* name)
 		{
+			unet_send_dbg_log("CKPT-W1 World pre-Map");
 			// Load map file
 			this->Map = new Objects::Map(name, Objects::Terrain::FirstGroundTextureIndex);
+			unet_send_dbg_log("CKPT-W2 World post-Map");
+			if (!this->Map || this->Map->EntityDefinitionsCount == 0)
+			{
+				/* Map allocation failed OR file read returned empty/garbage.
+				 * Don't proceed into the entity loop — that would dereference
+				 * Map->EntityDefinitions[i] and crash. The black screen is
+				 * already happening; this just prevents an undebuggable hang
+				 * and surfaces a clear sentinel in the server log. */
+				unet_send_dbg_log("CKPT-W2X Map alloc/load FAILED");
+				jo_clear_screen();
+				return;
+			}
 			Objects::Terrain::Map = this->Map;
 			Objects::Terrain::ClearColliders();
+			unet_send_dbg_log("CKPT-W3 Terrain set");
 
 			// Player contorller
 			uint8_t controller = 0;
+
+			// Log entity count so we can see if the map data is sane.
+			{
+				char buf[32]; int n = 0;
+				const char* hdr = "CKPT-W4 ents=";
+				while (hdr[n]) { buf[n] = hdr[n]; n++; }
+				int ec = (int)this->Map->EntityDefinitionsCount;
+				if (ec > 99) ec = 99;
+				if (ec >= 10) buf[n++] = '0' + (ec / 10);
+				buf[n++] = '0' + (ec % 10);
+				buf[n] = 0;
+				unet_send_dbg_log(buf);
+			}
 
 			// Start spawning entities
 			for (int i = 0; i < this->Map->EntityDefinitionsCount; i++)
@@ -82,6 +111,7 @@ namespace Entities
 					break;
 				}
 			}
+			unet_send_dbg_log("CKPT-W5 entities-spawned");
 
 			jo_clear_screen();
 		}

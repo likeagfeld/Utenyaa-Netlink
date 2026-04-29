@@ -271,6 +271,16 @@ namespace Objects
 	{
 		// Load level data
 		char* stream = jo_fs_read_file_in_dir(file, JO_ROOT_DIR, NULL);
+		if (!stream)
+		{
+			/* CD read failed (worn lens, bad sector, emulator quirk, OOM in
+			 * the file-system bounce buffer). Caller's defensive check on
+			 * EntityDefinitionsCount will catch this and abort World ctor
+			 * cleanly instead of dereferencing into garbage. */
+			this->EntityDefinitionsCount = 0;
+			this->EntityDefinitions = nullptr;
+			return;
+		}
 		char* streamStart = stream;
 		LevelData* level = GetAndIterate<LevelData>(stream);
 

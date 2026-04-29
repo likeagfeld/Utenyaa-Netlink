@@ -1233,6 +1233,26 @@ class UtenyaaServer:
         # whose state they represent.
         self.match.server_tick += 1
 
+        # Stalled-player liveness check. If a real (non-bot) player
+        # hasn't sent a single PLAYER_STATE 5 s into the match, their
+        # client black-screened during the LOBBY → GAMEPLAY transition.
+        # Mark them dead so the alive_count condition below can fire and
+        # the match ends rather than running 120 s waiting for someone
+        # who isn't there.
+        STALL_GRACE_TICKS = 100  # 5 s @ SERVER_TICK_RATE=20
+        if self.match.server_tick == STALL_GRACE_TICKS:
+            for pid, p in self.game_players.items():
+                if p.is_bot: continue
+                if p.alive and not p.state_received:
+                    log.info("Stalled player pid=%d (%s) — no PLAYER_STATE in %d ticks; marking dead",
+                             pid, p.name, STALL_GRACE_TICKS)
+                    p.alive = False
+                    p.hp = 0
+                    p.deaths += 1
+                    self._broadcast(build_player_kill(pid, 0xFF))
+                    self._broadcast(build_score_update(
+                        pid, p.kills, p.deaths, max(p.hp, 0)))
+
         # Snapshot every player's position into their pos_history deque
         # for lag-compensated bullet validation. Keep the latest 30 ticks
         # = 1.5 s of history at SERVER_TICK_RATE=20 — comfortably covers
