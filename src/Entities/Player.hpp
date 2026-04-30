@@ -266,25 +266,55 @@ namespace Entities
 				if (inX == Fxp(0.0) && inY == Fxp(0.0))
 					return;  // no input — no rotation, no movement
 
-				// Auto-rotate to face the movement direction (snap to 8).
+				/* Auto-rotate to face the movement direction (snap to 8).
+				 *
+				 * Previous version compared inX/inY to exactly 0 to gate
+				 * the cardinal branches — fine for D-pad (inX/inY land
+				 * on exact ±1.0 or 0.0) but broken for analog stick
+				 * input. Even after the 32-unit deadzone, a stick pushed
+				 * "straight up" almost always reads a few raw units of
+				 * X bleed, making `inX == 0.0` virtually never true.
+				 * Tank could only ever face the four diagonals.
+				 *
+				 * New scheme: snap by the ratio of |inX| to |inY|. The
+				 * 8-way sector boundaries lie at 22.5° / 67.5° from
+				 * each axis, where tan(22.5°) ≈ 0.414 and tan(67.5°) ≈
+				 * 2.414. Use 0.414 as the small-axis threshold relative
+				 * to the dominant axis: if the smaller component is
+				 * less than 41.4% of the larger, snap to cardinal
+				 * (dominant axis only); else diagonal. Comparison done
+				 * via |small| * 1000 vs |large| * 414 so it stays in
+				 * fxp without a divide. */
 				{
+					Fxp ax = inX < Fxp(0.0) ? -inX : inX;
+					Fxp ay = inY < Fxp(0.0) ? -inY : inY;
+					bool dominant_x = ax > ay;
+					Fxp small = dominant_x ? ay : ax;
+					Fxp large = dominant_x ? ax : ay;
+					/* small * 1000 < large * 414  →  small/large < 0.414  →  cardinal */
+					bool cardinal = (small * Fxp(1000.0)) < (large * Fxp(414.0));
+
 					Fxp targetAngle;
-					if (inY > Fxp(0.0))
-					{
-						if (inX > Fxp(0.0))      targetAngle = Fxp(Trigonometry::RadPi * 0.25);
-						else if (inX < Fxp(0.0)) targetAngle = Fxp(Trigonometry::RadPi * 0.75);
-						else                     targetAngle = Fxp(Trigonometry::RadPi * 0.5);
-					}
-					else if (inY < Fxp(0.0))
-					{
-						if (inX > Fxp(0.0))      targetAngle = Fxp(Trigonometry::RadPi * 1.75);
-						else if (inX < Fxp(0.0)) targetAngle = Fxp(Trigonometry::RadPi * 1.25);
-						else                     targetAngle = Fxp(Trigonometry::RadPi * 1.5);
-					}
-					else
-					{
-						if (inX > Fxp(0.0)) targetAngle = Fxp(0.0);
-						else                targetAngle = Fxp(Trigonometry::RadPi);
+					if (cardinal) {
+						if (dominant_x) {
+							targetAngle = (inX > Fxp(0.0)) ? Fxp(0.0)
+							                               : Fxp(Trigonometry::RadPi);
+						} else {
+							targetAngle = (inY > Fxp(0.0))
+							                ? Fxp(Trigonometry::RadPi * 0.5)
+							                : Fxp(Trigonometry::RadPi * 1.5);
+						}
+					} else {
+						/* Diagonal — pick by quadrant of (inX, inY). */
+						if (inY > Fxp(0.0)) {
+							targetAngle = (inX > Fxp(0.0))
+							                ? Fxp(Trigonometry::RadPi * 0.25)   // DR
+							                : Fxp(Trigonometry::RadPi * 0.75);  // DL
+						} else {
+							targetAngle = (inX > Fxp(0.0))
+							                ? Fxp(Trigonometry::RadPi * 1.75)   // UR
+							                : Fxp(Trigonometry::RadPi * 1.25);  // UL
+						}
 					}
 					this->angle = targetAngle;
 				}
