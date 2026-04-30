@@ -35,10 +35,10 @@ That's it. The lobby is intentionally three buttons in this build. Stage and cha
 
 ### Match rules
 
-- Match timer counts down server-authoritatively (default 120 seconds, admin-tunable)
+- Match timer counts down server-authoritatively (default 120 seconds)
 - **Match ends when**:
   - any player's HP hits 0 and `alive_count <= 1` (instant — typical "1v1 last-tank-standing" win)
-  - **OR** the match timer hits 0 (highest-HP player wins; no sudden death by default — admin can enable via tune knob)
+  - **OR** the match timer hits 0 (highest-HP player wins; no sudden death by default)
 - Server detects death within one tick (50 ms) and broadcasts `GAME_OVER`; client shows the WINNER banner and returns to the lobby in ~1.5 s
 
 ### Co-op (P2 on the same Saturn)
@@ -65,7 +65,7 @@ That's it. The lobby is intentionally three buttons in this build. Stage and cha
 ### Persistence
 
 - **Saturn backup RAM**: player name + reconnect UUID survive power-off (so the leaderboard recognises you across sessions)
-- **Server leaderboard**: top players by wins, best HP, kills, deaths, matches played — visible via the admin portal (operator-side)
+- **Server leaderboard**: top players by wins, best HP, kills, deaths, matches played
 
 ## Critical fixes shipped in this build
 
@@ -76,7 +76,7 @@ That's it. The lobby is intentionally three buttons in this build. Stage and cha
 | Top-of-screen text strobing | `jo_clear_screen()` (1200 NBG0 cell-writes) was running mid-display every frame from `menu.Update`'s double-clear in gameplay and `lobby_draw`'s top-of-frame clear | Skip `menu.Update` when online + GAMEPLAY; remove per-frame clear in lobby; all writes now use fixed-width formats that overwrite in place |
 | 2nd-game lobby: `A` then `START` flips ready off | `g_net.my_ready` (client) wasn't reset on match-end while server's `c.ready` was → mismatch caused `START` handler's resync logic to fire a redundant READY toggle that turned ready off | New `unet_reset_ready_state()` called at match-end → LOBBY transition; input flags also reset |
 | Game didn't end on kill | `g_Game.myPlayerID2` was never synced from `g_net.my_player_id2` (set by `LOCAL_PLAYER_ACK`) → death-check guard `if (g_Game.myPlayerID2 != 0xFF)` always saw 0xFF → `CLIENT_DEATH_P2` never sent → server's `alive_count` never dropped | Per-frame sync in `unet_glue_tick_frame` now mirrors `my_player_id2` the same way `my_player_id` is mirrored |
-| Game didn't end on timer expiry | Server's `sudden_death_enabled` was on by default and extended the timer to 99999 s when 2 alive players were tied at full HP | `sudden_death_enabled` default flipped to **off** — timer = 0 ends match immediately with highest-HP player as winner. Admin can re-enable via `/api/tune_sudden_death` |
+| Game didn't end on timer expiry | Server's `sudden_death_enabled` was on by default and extended the timer to 99999 s when 2 alive players were tied at full HP | `sudden_death_enabled` default flipped to **off** — timer = 0 ends match immediately with highest-HP player as winner |
 | Heap-corruption crash `jo_free Bad pointer 0x..323A20` (during early debugging) | Toolchain mismatch with newlib's `_malloc_r`/`_sbrk` heap fighting jo_engine's static pool | `src/libc_stubs.c` wrappers route `malloc`/`free`/reentrant variants to `jo_malloc`/`jo_free`; `_sbrk` hard-fails. Single heap, single pool |
 
 ## Known limitations & next steps (alpha 0.2)

@@ -857,13 +857,24 @@ class UtenyaaServer:
         except Exception as e:
             log.warning("Failed to save join history: %s", e)
 
-    def _record_join(self, username: str, address):
+    def _record_join_event(self, event: str, username: str, address,
+                           reason: str = ""):
+        """Append a unified join-history entry. Events: join, rejoin,
+        leave, kick, timeout, dropped. Mirrored format with the rest
+        of the saturn-admin fleet so the unified portal renders it
+        with the same Time / Event / Name / IP / Reason columns."""
         self._join_history.append({
-            "t":    int(time.time()),
-            "name": username,
-            "addr": str(address[0]) if address else "?"
+            "t":      int(time.time()),
+            "event":  event,
+            "name":   username or "",
+            "ip":     str(address[0]) if address else "",
+            "reason": reason,
         })
         self._save_join_history()
+
+    def _record_join(self, username: str, address):
+        # Back-compat shim — still called from the welcome path.
+        self._record_join_event("join", username, address)
 
     # ---------- player/client helpers ----------
 
@@ -1737,12 +1748,15 @@ class UtenyaaServer:
             # unknown opcode — ignore
             pass
 
-    def _drop_client(self, uid: int):
+    def _drop_client(self, uid: int, reason: str = "disconnected"):
         c = self.clients.pop(uid, None)
         if not c: return
         try: c.socket.close()
         except OSError: pass
         if c.authenticated:
+            # Record a leave event so the admin portal's join-history
+            # panel shows arrivals + departures, not just arrivals.
+            self._record_join_event("leave", c.username, c.address, reason)
             self._broadcast(build_player_leave(uid))
             self._broadcast_lobby()
             # If they were in an active match, mark the dropped player
@@ -2041,7 +2055,36 @@ class UtenyaaServer:
                     self.wfile.write(body)
                     return
                 if path.startswith("/api/join_history"):
-                    body = json.dumps(server_ref._join_history).encode()
+                    # Parse optional ?limit=N (newest-first slice).
+                    limit = None
+                    qs = self.path.split("?", 1)
+                    if len(qs) == 2:
+                        from urllib.parse import parse_qs
+                        try:
+                            v = parse_qs(qs[1]).get("limit", [None])[0]
+                            if v is not None: limit = int(v)
+                        except Exception:
+                            limit = None
+                    hist = server_ref._join_history
+                    if limit is not None and limit > 0:
+                        rows = hist[-limit:]
+                    else:
+                        rows = hist
+                    # Normalize legacy entries (which used 'addr' instead
+                    # of 'ip' and had no 'event' or 'reason' fields).
+                    norm = []
+                    for e in reversed(rows):  # newest first
+                        norm.append({
+                            "t":      e.get("t", 0),
+                            "event":  e.get("event", "join"),
+                            "name":   e.get("name", ""),
+                            "ip":     e.get("ip", e.get("addr", "")),
+                            "reason": e.get("reason", ""),
+                        })
+                    body = json.dumps({
+                        "events": norm,
+                        "total": len(hist),
+                    }).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))

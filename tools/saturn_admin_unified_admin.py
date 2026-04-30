@@ -193,6 +193,7 @@ def _render_admin_html() -> bytes:
         # geometry has tank-collision dead spots; will be re-enabled
         # once geometry is patched.
         utenyaa_stage_panel = ""
+        utenyaa_history_panel = ""
         if slug == "utenyaa":
             utenyaa_stage_panel = f"""
   <div class="panel utenyaa-stage-panel">
@@ -206,6 +207,16 @@ def _render_admin_html() -> bytes:
     <div class="controls" style="margin-top:10px">
       <button class="btn" onclick="utenyaaApplyStages('{slug}')">Apply</button>
       <span class="utenyaa-stage-status muted" style="margin-left:10px"></span>
+    </div>
+  </div>"""
+            utenyaa_history_panel = f"""
+  <div class="panel">
+    <h3>Join History (Last 20)</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Time</th><th>Event</th><th>Name</th><th>IP</th><th>Reason</th></tr></thead>
+        <tbody class="utenyaa-jh-table"></tbody>
+      </table>
     </div>
   </div>"""
 
@@ -266,7 +277,7 @@ def _render_admin_html() -> bytes:
     <h3>Server Status</h3>
     <div class="cards"></div>
   </div>
-{tuning_panel}{utenyaa_stage_panel}{mmm_panel}{mmm_history_panel}
+{tuning_panel}{utenyaa_stage_panel}{utenyaa_history_panel}{mmm_panel}{mmm_history_panel}
   <div class="panel">
     <h3>Connected Players</h3>
     <div class="table-wrap">
@@ -614,6 +625,7 @@ function refresh(slug){
     }
     if(slug==='utenyaa'){
       utenyaaLoadStages(slug);
+      utenyaaLoadJoinHistory(slug);
     }
   }).catch(function(){
     $('.status_dot',pane).style.color='#d32f2f';
@@ -725,6 +737,38 @@ function utenyaaApplyStages(slug){
     if(status){status.textContent='Applied at '+new Date().toLocaleTimeString();status.style.color='#2ecc71';}
   }).catch(function(e){
     if(status){status.textContent='Apply failed: '+e.message;status.style.color='#d32f2f';}
+  });
+}
+function utenyaaLoadJoinHistory(slug){
+  var pane=panel(slug);
+  var tb=$('.utenyaa-jh-table',pane);
+  if(!tb)return;
+  api('GET',slug,'join_history?limit=20').then(function(d){
+    tb.innerHTML='';
+    var rows=(d&&d.events)||[];
+    if(!rows.length){
+      tb.innerHTML='<tr><td colspan="5" style="color:#888;text-align:center">No events yet</td></tr>';
+      return;
+    }
+    rows.forEach(function(ev){
+      var tr=document.createElement('tr');
+      var dt=ev.t?new Date(ev.t*1000):null;
+      var when=dt?dt.toLocaleString():'-';
+      var evtype=ev.event||'?';
+      var color={
+        'join':'#2ecc71','rejoin':'#3498db',
+        'leave':'#e67e22','kick':'#e94560','timeout':'#9b59b6'
+      }[evtype]||'#aaa';
+      tr.innerHTML=
+        '<td style="white-space:nowrap">'+when+'</td>'+
+        '<td style="color:'+color+';font-weight:600">'+evtype+'</td>'+
+        '<td>'+(ev.name||'')+'</td>'+
+        '<td style="font-family:monospace;font-size:12px">'+(ev.ip||'')+'</td>'+
+        '<td class="muted">'+(ev.reason||'')+'</td>';
+      tb.appendChild(tr);
+    });
+  }).catch(function(){
+    tb.innerHTML='<tr><td colspan="5" style="color:#d32f2f;text-align:center">offline</td></tr>';
   });
 }
 function mmmForceEnd(slug){
