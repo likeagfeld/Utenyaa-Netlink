@@ -633,16 +633,31 @@ void OnlineBridge::DrawGameplayOverlay()
         font_draw_centered("*** SUDDEN DEATH ***", FONT_Y(3), 600);
     }
 
+    /* Roster-by-pid lookup helper: game_roster is filled by lobby slot
+     * index in on_game_start, but every entry stores the player's
+     * server-assigned pid in `id`. To get a NAME from a PID we must
+     * find the slot whose .id == pid, NOT direct-index by pid. The
+     * previous direct-index showed wrong names whenever ready-order
+     * pid assignment didn't match lobby join order. */
+    auto roster_name_by_pid = [&nd](uint8_t pid) -> const char* {
+        if (pid >= UNET_MAX_PLAYERS) return nullptr;
+        for (int k = 0; k < nd->game_roster_count; k++) {
+            if (nd->game_roster[k].active && nd->game_roster[k].id == pid)
+                return nd->game_roster[k].name;
+        }
+        return nullptr;
+    };
+
     /* Dead-player spectator indicator */
     if (LocalIsDeadSpectator() && !s_match_end_pending)
     {
         uint8_t target = GetSpectatorTargetPid();
         if (target != 0xFF)
         {
+            const char* tname = roster_name_by_pid(target);
             font_printf_centered(FONT_Y(25), 600,
                                  "SPECTATING: %-16s",
-                                 nd->game_roster[target].active
-                                    ? nd->game_roster[target].name : "LEADER");
+                                 tname ? tname : "LEADER");
         }
         else
         {
@@ -653,10 +668,8 @@ void OnlineBridge::DrawGameplayOverlay()
     /* Match-end results banner */
     if (s_match_end_pending)
     {
-        const char* wname = "---";
-        if (s_match_end_winner < UNET_MAX_PLAYERS &&
-            nd->game_roster[s_match_end_winner].active)
-            wname = nd->game_roster[s_match_end_winner].name;
+        const char* wname = roster_name_by_pid(s_match_end_winner);
+        if (!wname) wname = "---";
 
         font_draw_centered(s_match_end_sudden ? "SUDDEN DEATH OVER" : "MATCH OVER",
                            FONT_Y(10), 600);

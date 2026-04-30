@@ -373,21 +373,37 @@ void lobby_draw(void)
     /* Persistent WINNER banner — shows after a match ends, stays
      * until the next match begins (on_game_start clears
      * has_last_results). Cleared row when no results to show
-     * so it doesn't leave stale text. */
-    if (nd->has_last_results &&
-        nd->last_winner_id < UNET_MAX_PLAYERS &&
-        nd->game_roster[nd->last_winner_id].active)
+     * so it doesn't leave stale text.
+     *
+     * NB: game_roster is filled by lobby slot index in on_game_start,
+     * but each entry stores the player's server-assigned game_pid
+     * (game_roster[i].id). winner_id is a pid, NOT a slot — must
+     * look up by id match. Previous code did game_roster[winner_id]
+     * direct-index, which displayed the WRONG name whenever the
+     * ready-order pid assignment didn't match the lobby join order
+     * (e.g. player A in slot 0 ready'd second → got pid 1; player B
+     * in slot 1 ready'd first → got pid 0; on B's win, banner showed
+     * A's name). Found from playtest log: "wrong winner displayed
+     * back at lobby... not always but often". */
     {
-        font_printf(FONT_X(1), FONT_Y(5), 500,
-                    "LAST WINNER: %-20s",
-                    nd->game_roster[nd->last_winner_id].name);
+        const char* winner_name = NULL;
+        if (nd->has_last_results && nd->last_winner_id < UNET_MAX_PLAYERS) {
+            for (int k = 0; k < nd->game_roster_count; k++) {
+                if (nd->game_roster[k].active &&
+                    nd->game_roster[k].id == nd->last_winner_id) {
+                    winner_name = nd->game_roster[k].name;
+                    break;
+                }
+            }
+        }
+        if (winner_name) {
+            font_printf(FONT_X(1), FONT_Y(5), 500,
+                        "LAST WINNER: %-20s", winner_name);
+        } else {
+            font_draw("                                      ",
+                      FONT_X(1), FONT_Y(5), 500);
+        }
     }
-    else
-    {
-        font_draw("                                      ",
-                  FONT_X(1), FONT_Y(5), 500);
-    }
-
     /* Simplified roster: name + ready status only. Character + stage
      * are auto-assigned by server in this minimal mode (per user
      * directive: 'remove voting on maps and sprite selection... have

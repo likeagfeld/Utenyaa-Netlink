@@ -772,6 +772,15 @@ class UtenyaaServer:
             "timer_broadcast_hz":     1,      # MATCH_TIMER broadcasts per second
             "sudden_death_enabled":   False,  # default off — timer=0 ends match cleanly with highest-HP winner. Admin can flip via /api/tune_sudden_death.
             "verbose_rx_log":         True,   # alpha: log every RX while debugging start-flow
+            # Per-stage enable mask (1 = available for match-start RNG).
+            # Order: [Island, Cross, Valley, Railway]. CROSS disabled by
+            # default — its road/grass intersection geometry has tank
+            # collision dead spots where players get stuck. Admin can
+            # re-enable from the portal once the geometry is fixed.
+            "stage_enabled_island":   True,
+            "stage_enabled_cross":    False,
+            "stage_enabled_valley":   True,
+            "stage_enabled_railway":  True,
         }
 
         # Lobby players (keyed by game_pid 0..3, mapped from client user_id)
@@ -980,12 +989,32 @@ class UtenyaaServer:
 
     # ---------- game start / run / end ----------
 
+    # Stage IDs match UNET_STAGE_* in utenyaa_protocol.h:
+    #   0 = Island, 1 = Cross, 2 = Valley, 3 = Railway
+    _STAGE_TUNE_KEYS = (
+        "stage_enabled_island",
+        "stage_enabled_cross",
+        "stage_enabled_valley",
+        "stage_enabled_railway",
+    )
+
+    def _enabled_stages(self) -> list:
+        """Return list of stage IDs that are admin-enabled. Always non-
+        empty: if every flag is off (admin misconfig), fall back to
+        stage 0 (Island) so match-start can't deadlock."""
+        out = [i for i in range(STAGE_COUNT)
+               if self.tune.get(self._STAGE_TUNE_KEYS[i], True)]
+        return out if out else [0]
+
     def _pick_stage(self) -> int:
+        enabled = self._enabled_stages()
+        # Vote tally restricted to enabled stages — disabled stage
+        # votes are ignored even if a client UI somehow casts one.
         tally = self._stage_tally()
-        max_votes = max(tally)
+        max_votes = max((tally[i] for i in enabled), default=0)
         if max_votes == 0:
-            return random.randint(0, STAGE_COUNT - 1)
-        winners = [i for i, v in enumerate(tally) if v == max_votes]
+            return random.choice(enabled)
+        winners = [i for i in enabled if tally[i] == max_votes]
         return random.choice(winners)
 
     def _on_start_game_req(self, c: ClientInfo):
