@@ -211,7 +211,7 @@ def _render_admin_html() -> bytes:
   </div>"""
             utenyaa_history_panel = f"""
   <div class="panel">
-    <h3>Join History (Last 20)</h3>
+    <h3>Join History (Last 200)</h3>
     <div class="table-wrap">
       <table>
         <thead><tr><th>Time</th><th>Event</th><th>Name</th><th>IP</th><th>Reason</th></tr></thead>
@@ -277,7 +277,7 @@ def _render_admin_html() -> bytes:
     <h3>Server Status</h3>
     <div class="cards"></div>
   </div>
-{tuning_panel}{utenyaa_stage_panel}{utenyaa_history_panel}{mmm_panel}{mmm_history_panel}
+{tuning_panel}{utenyaa_stage_panel}{mmm_panel}{mmm_history_panel}
   <div class="panel">
     <h3>Connected Players</h3>
     <div class="table-wrap">
@@ -299,15 +299,7 @@ def _render_admin_html() -> bytes:
     </div>
   </div>
 
-  <div class="panel">
-    <h3>Join History (Last 200)</h3>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Time</th><th>Name</th><th>IP</th><th>Event</th></tr></thead>
-        <tbody class="htable"></tbody>
-      </table>
-    </div>
-  </div>
+{utenyaa_history_panel}
 </div>""")
 
     html = """<!DOCTYPE html>
@@ -393,7 +385,6 @@ function showTab(slug){
   $$('.tab').forEach(function(t){t.classList.toggle('active',t.getAttribute('data-slug')===slug)});
   $$('.tab-content').forEach(function(p){p.classList.toggle('active',p.getAttribute('data-slug')===slug)});
   refresh(slug);
-  loadHistory(slug);
 }
 
 function showMsg(t,c){
@@ -743,7 +734,7 @@ function utenyaaLoadJoinHistory(slug){
   var pane=panel(slug);
   var tb=$('.utenyaa-jh-table',pane);
   if(!tb)return;
-  api('GET',slug,'join_history?limit=20').then(function(d){
+  api('GET',slug,'join_history?limit=200').then(function(d){
     tb.innerHTML='';
     var rows=(d&&d.events)||[];
     if(!rows.length){
@@ -802,30 +793,11 @@ function loadMMMJoinHistory(slug){
   });
 }
 
-function loadHistory(slug){
-  var pane=panel(slug);
-  var tb=$('.htable',pane);
-  api('GET',slug,'history').then(function(d){
-    tb.innerHTML='';
-    (d.entries||[]).forEach(function(e){
-      var tr=document.createElement('tr');
-      tr.innerHTML='<td>'+e.time+'</td><td>'+e.name+'</td><td>'+e.ip+'</td><td>'+e.event+'</td>';
-      tb.appendChild(tr);
-    });
-    if(!(d.entries||[]).length){
-      tb.innerHTML='<tr><td colspan="4" style="color:#888;text-align:center">No history</td></tr>';
-    }
-  }).catch(function(err){
-    // A 404 means the per-game server doesn't expose history; not a real
-    // error. Anything else (502 upstream offline, network failure, etc.)
-    // is a real problem worth flagging in red.
-    if(err && err.status===404){
-      tb.innerHTML='<tr><td colspan="4" style="color:#888;text-align:center">Not tracked on this server</td></tr>';
-    } else {
-      tb.innerHTML='<tr><td colspan="4" class="offline">Unavailable</td></tr>';
-    }
-  });
-}
+/* loadHistory() removed: was a global per-tab dead-end that called the
+ * non-existent /api/<slug>/history endpoint and showed "Not tracked on
+ * this server" as a duplicate of the working per-game history panels.
+ * Each game's history is now rendered via its own dedicated loader
+ * (utenyaaLoadJoinHistory, loadMMMJoinHistory). */
 
 function kick(slug,uuid,name){
   if(!confirm('Kick '+name+' from '+slug+'?'))return;
@@ -859,7 +831,7 @@ function tick(){
 }
 
 // Initial render for every tab so each one has dashboard data if user switches.
-GAMES.forEach(function(g){refresh(g.slug);loadHistory(g.slug);refreshTuning(g.slug);});
+GAMES.forEach(function(g){refresh(g.slug);refreshTuning(g.slug);});
 setInterval(tick,1000);
 </script></body></html>"""
     html = (html
