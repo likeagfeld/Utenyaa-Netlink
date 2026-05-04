@@ -26,6 +26,7 @@
 
 #include "../net/utenyaa_net.h"
 #include "../net/utenyaa_game.h"
+#include "../net/utenyaa_main_glue.h"   /* unet_glue_num_characters */
 
 namespace Entities
 {
@@ -689,7 +690,30 @@ namespace Entities
 			jo_3d_translate_matrix_fixed(this->position.x.Value(), (this->position.y - 1.0).Value(), (this->position.z + 4.0).Value());
 			Fxp mirror = 0.4;
 
-			int index = (this->health > 0) ? this->controller : 4;
+			/* Pick which CHARS.PAK character to render. Offline / dead
+			 * tile fall back to the spawn-order controller index — the
+			 * upstream behavior. Online + alive: look up the server's
+			 * character_id for this pid in the roster so the cat
+			 * stays stable per username (server's stable-hash fix
+			 * takes effect here). Without this, the head sprite was
+			 * keyed only by ready-order pid and changed every match. */
+			int charIdx = (int)this->controller;
+			if (g_Game.isOnlineMode && this->health > 0)
+			{
+				const unet_state_data_t* nd = unet_get_data();
+				const int nchars = unet_glue_num_characters();
+				for (int i = 0; i < nd->game_roster_count; i++)
+				{
+					if (nd->game_roster[i].active &&
+						nd->game_roster[i].id == (uint8_t)this->controller)
+					{
+						uint8_t cid = nd->game_roster[i].character_id;
+						if (cid < (uint8_t)nchars) charIdx = (int)cid;
+						break;
+					}
+				}
+			}
+			int index = (this->health > 0) ? charIdx : 4;
 			int ang = Trigonometry::RadiansToDeg(this->angle);
 			int frame = 0;
 
