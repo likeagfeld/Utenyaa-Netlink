@@ -25,6 +25,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -72,6 +73,23 @@ MAX_CRATES = 16
 STAGE_COUNT = 4
 STAGE_NAMES = ["Island", "Cross", "Valley", "Railway"]
 HP_MAX = 6
+# Number of distinct character sprites the C++ client actually has
+# loaded from CHARS.PAK (5 chars × 5 frames each — see
+# unet_glue_num_characters() in src/main.cxx). The protocol-level
+# UNET_MAX_CHARACTERS = 12 ceiling is bigger than the asset count;
+# server-side stable assignment must mod by the actual count or
+# clients render an out-of-range frame as a black sprite.
+RENDERED_CHARACTER_COUNT = 5
+
+def _stable_character_for(username: str) -> int:
+    """Deterministic character index per username. Survives server
+    restarts and round-to-round pid reshuffles. SHA-1 is overkill but
+    cheap and explicitly stable — Python's built-in hash() randomizes
+    string seeds per process which would defeat the purpose."""
+    if not username:
+        return 0
+    digest = hashlib.sha1(username.encode("utf-8", "replace")).digest()
+    return int.from_bytes(digest[:4], "big") % RENDERED_CHARACTER_COUNT
 # UNETv2 PLAYER_SYNC packs HP into the low nibble of byte 11 (alongside
 # pickup in the high nibble). Anything > 15 silently wraps on the wire,
 # which would break damage tracking in nasty ways. Guard at startup so
@@ -1081,8 +1099,18 @@ class UtenyaaServer:
             if next_pid >= MAX_PLAYERS: break
             cc.in_game = True
             cc.game_pid = next_pid
+            # Character assignment: stable per-username hash so a
+            # given player keeps the same cat sprite across rounds
+            # AND across server restarts. Previous code defaulted to
+            # next_pid (the current ready_at-order pid) which churned
+            # every match — user-reported as "cat color keeps changing
+            # between rounds". Once cc.character_id is set we honour
+            # it so future character-select UI can override.
+            char = (cc.character_id if cc.character_id != 0xFF
+                    else _stable_character_for(cc.username))
+            cc.character_id = char         # remember for next round
             self.game_players[next_pid] = UtenyaaPlayer(
-                next_pid, cc.username, cc.character_id if cc.character_id != 0xFF else next_pid)
+                next_pid, cc.username, char)
             next_pid += 1
             # Local co-op: allocate one pid per registered P2 name. Store
             # the assigned pid in cc.local_pids so subsequent P2-prefixed
@@ -1676,6 +1704,9 @@ class UtenyaaServer:
                 p.alive = False
                 p.hp = 0
                 p.deaths += 1
+                # Same DAMAGE-then-KILL pattern as P1 path so peers see
+                # this co-op slot reach hp=0 reliably.
+                self._broadcast(build_damage(p.pid, 0xFF, 0, 0))
                 self._broadcast(build_player_kill(p.pid, 0xFF))
                 self._broadcast(build_score_update(p.pid, p.kills, p.deaths,
                                                    max(p.hp, 0)))
@@ -1704,6 +1735,16 @@ class UtenyaaServer:
                 p.alive = False
                 p.hp = 0
                 p.deaths += 1
+                # Broadcast DAMAGE first with new_hp=0 so peers' local
+                # Player.health gets clamped to 0 via cb_damage. Without
+                # this, only PLAYER_KILL is sent and peers whose local
+                # bullet sim never reached this victim (packet loss /
+                # interp lag) keep showing the victim alive in the HUD.
+                # User-reported as "portrait doesn't show dead even
+                # though they are". DAMAGE-then-KILL ordering matters:
+                # cb_damage updates Player.health, cb_player_kill
+                # double-checks the clamp.
+                self._broadcast(build_damage(p.pid, 0xFF, 0, 0))
                 self._broadcast(build_player_kill(p.pid, 0xFF))
                 self._broadcast(build_score_update(p.pid, p.kills, p.deaths,
                                                    max(p.hp, 0)))

@@ -157,7 +157,16 @@ namespace UI
 
         GUIElement* screens[TotalScreens] =
         {
-            new ButtonGroup<GoToMainMenu, PlayOnline, GoToCredits>,
+            /* Intro screen — order MUST match the visual y positions
+             * of the buttons (15, 16, 17) so up/down arrow key cursor
+             * traversal moves monotonically on screen. Previous order
+             * <Play, PlayOnline, Credits> matched array indices but
+             * y positions were 15, 17, 16 — pressing DOWN from Play
+             * jumped to PlayOnline (skipping Credits visually) and
+             * then back UP to Credits. User-reported as "scroll
+             * reversed". Visual top→bottom is Play (15), Credits (16),
+             * PlayOnline (17), so list them in that order here. */
+            new ButtonGroup<GoToMainMenu, GoToCredits, PlayOnline>,
             new ButtonGroup<ReyMe, DannyDuarte, am25, Random, AnriFox>,
             new ButtonGroup<StageSelector, PlayerCountSelector, TimeLimitSelector, GoToIntro, StartGame>,
             new ButtonGroup<Unpause,Quit>,

@@ -206,9 +206,27 @@ static void cb_damage(uint8_t victim_id, uint8_t /*attacker_id*/,
     if (delta != 0) p->HandleMessages(Messages::Damage(-delta));
 }
 
-static void cb_player_kill(uint8_t /*victim_id*/, uint8_t /*attacker_id*/)
+static void cb_player_kill(uint8_t victim_id, uint8_t /*attacker_id*/)
 {
-    /* Offline path already handles death via HP<=0; nothing extra needed. */
+    /* When the server broadcasts PLAYER_KILL via the CLIENT_DEATH path
+     * it does NOT also broadcast a DAMAGE event, so peers' local
+     * Player.health for the victim can stay > 0 if their bullet sim
+     * never delivered the killing blow locally (packet loss, interp
+     * lag, missed local-sim collision, etc.). HUD::Draw uses the
+     * health value to pick the dead head-frame, so a stale positive
+     * health left the portrait showing alive even though the server
+     * (and the victim's own client) consider them dead.
+     *
+     * Fix: explicitly clamp the victim's local health to 0 here so
+     * the next UpdatePlayer message from Player::Update propagates a
+     * "dead" state to the HUD reliably regardless of what local sim
+     * did or didn't see. */
+    Entities::Player* p = find_player_by_pid(victim_id);
+    if (p && p->GetHealth() > 0)
+    {
+        const int16_t curHp = p->GetHealth();
+        p->HandleMessages(Messages::Damage(curHp));
+    }
 }
 
 static void cb_match_timer(uint16_t seconds_remaining)

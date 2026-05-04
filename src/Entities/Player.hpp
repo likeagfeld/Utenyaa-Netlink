@@ -595,7 +595,16 @@ namespace Entities
 		 */
 		bool IsColliderEnabled() override
 		{
-			return true;
+			/* Dead tanks must NOT block live tanks. Online mode pads
+			 * the AABB by +6 units (Player::Size+6 per GetBounds), so
+			 * a dead corpse left behind creates a ~20-unit-wide
+			 * invisible wall that other players can't pass through.
+			 * User-reported as "invisible wall" / "dead zone around
+			 * player I can't get past". Only collide when alive.
+			 * The tick loop also guards HandleMovement on health > 0
+			 * so dead tanks are static — they remain at the position
+			 * they died, just no longer block motion. */
+			return this->health > 0;
 		}
 
 		/** @brief Make entity think
@@ -644,17 +653,33 @@ namespace Entities
 			// Draw body
 			jo_3d_push_matrix();
 			jo_3d_translate_matrix_fixed(this->position.x.Value(), this->position.y.Value(), (this->position.z + 1.0).Value());
-			slRotZ(Trigonometry::RadiansToSgl(this->angle));
 
-			this->model->Draw(1);
-
-			/* Muzzle flash overlay during the bright firing impact —
-			 * upstream's ~12-frame window (frames 17–27 of cooldown 0x1b).
-			 * No body blink: original arena feel preferred per user
-			 * directive to revert to upstream firing. */
-			if (this->shootCoolDownTimeLeft > 0x10)
+			if (this->health > 0)
 			{
-				this->model->Draw(0);
+				/* Alive — render upright body with current facing. */
+				slRotZ(Trigonometry::RadiansToSgl(this->angle));
+				this->model->Draw(1);
+
+				/* Muzzle flash overlay during the bright firing impact —
+				 * upstream's ~12-frame window. */
+				if (this->shootCoolDownTimeLeft > 0x10)
+				{
+					this->model->Draw(0);
+				}
+			}
+			else
+			{
+				/* Dead — render the body tipped on its side (rotate 70°
+				 * around Y so the tank lays flat) and offset DOWN so the
+				 * silhouette reads as wreckage instead of a still-alive
+				 * tank just facing oddly. Also lower z so the body sinks
+				 * into the ground a bit, and skip muzzle flash. This
+				 * gives a clear, visible "this tank is destroyed" cue
+				 * without needing a separate wreckage model. */
+				jo_3d_translate_matrix_fixed(0, 0, -((Fxp)1.5).Value());
+				slRotY(jo_DEGtoANG_int(72));
+				slRotZ(Trigonometry::RadiansToSgl(this->angle));
+				this->model->Draw(1);
 			}
 
 			jo_3d_pop_matrix();
