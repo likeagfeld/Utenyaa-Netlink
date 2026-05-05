@@ -511,29 +511,27 @@ namespace Entities
 		 */
 		void GetBounds(AABB* result) override
 		{
-			// Online mode: expand hitbox by NET_COLLISION_PAD (3 units in
-			// Fxp 16.16 = 3.0 world units) to compensate for remote
-			// position desync. Matches the Disasteroids fix: otherwise a
-			// bullet can visually pass through a remote tank when their
-			// snapshot is 2-3 frames stale compared to the shooter.
-			if (g_Game.isOnlineMode)
-			{
-				/* Online: bullet collision against remote tanks needs a
-				 * padded hitbox because the rendered position is 100 ms
-				 * behind reality (UNET_INTERP_LAG_FRAMES). Pad +6 (was
-				 * +3): a tank moving at MovementSpeed=30 units/sec can
-				 * traverse ~3 units in the 100 ms window between two
-				 * snapshots, so the previous +3 was exactly the worst-
-				 * case displacement, leaving zero margin for bullet
-				 * travel time. +6 gives clean point-blank hits without
-				 * making far-distance shots feel hit-claimy. */
-				Fxp paddedSize = Player::Size + Fxp::FromInt(6);
-				*result = AABB(this->position, Vec3(paddedSize, paddedSize, paddedSize));
-			}
-			else
-			{
-				*result = AABB(this->position, Vec3(Player::Size, Player::Size, Player::Size));
-			}
+			/* Online padding policy: ONLY remote players get the +6
+			 * pad. Padding both sides (local AND remote) made the
+			 * effective player-vs-player blocking distance 4+10+4+10
+			 * → AABB-overlap fires at center-to-center 20 units,
+			 * vs offline's 8 units. Symptom: tanks "stuck and can't
+			 * move" / "stuck behind invisible walls" — the local
+			 * player's own padded body locked them up against any
+			 * remote tank 14+ visible units away. By padding only
+			 * the remote side, bullet hit detection still benefits
+			 * (point-vs-AABB uses the remote's bounds → +6), while
+			 * the local player's own physics body stays at the
+			 * native 4-unit half-size. Effective local-vs-remote
+			 * blocking distance falls to 14 (4 local + 10 remote),
+			 * close enough to offline feel for tanks to navigate. */
+			bool isRemoteOnline = g_Game.isOnlineMode &&
+				((uint8_t)this->controller != g_Game.myPlayerID) &&
+				!(g_Game.hasSecondLocal && (uint8_t)this->controller == g_Game.myPlayerID2);
+			Fxp halfSize = isRemoteOnline
+				? (Player::Size + Fxp::FromInt(6))
+				: Player::Size;
+			*result = AABB(this->position, Vec3(halfSize, halfSize, halfSize));
 		}
 
 		/** @brief Apply an already-interpolated snapshot (remote players only).

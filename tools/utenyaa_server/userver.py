@@ -1200,96 +1200,142 @@ class UtenyaaServer:
                                ox: int, oy: int, oz: int,
                                dx: int, dy: int, dz: int,
                                rewind_ticks: int = 3,
-                               cone_radius: int = 8,
-                               damage: int = BULLET_DAMAGE) -> bool:
-        """Server-authoritative point-blank hit validation with rewind.
+                               cone_radius: int = 12,
+                               damage: int = BULLET_DAMAGE,
+                               max_range_units: int = 300) -> bool:
+        """Server-authoritative bullet hit validation along the FULL trajectory.
 
         ox/oy/oz, dx/dy/dz are fxp 16.16 raw values from the shooter's
-        FIRE_BULLET packet. We rewind every other living player to their
-        position `rewind_ticks` server-ticks ago (covers the modem RTT
-        plus the client's interp buffer lag) and check whether any falls
-        inside the cone (≤ cone_radius world units AND in the bullet's
-        forward half-space).
+        FIRE_BULLET packet. (dx,dy) is a unit vector — magnitude 65536.
 
-        On a hit we apply damage immediately and broadcast DAMAGE +
-        PLAYER_KILL events. The shooter's local bullet entity still
-        travels for cosmetic purposes; the victim's own local bullet
-        sim may also apply damage, but `sent_death`/`hp` clamping +
-        the victim's CLIENT_DEATH gate (only fires when hp drops to 0)
-        means double-application can't kill them twice.
+        The previous version only validated POINT-BLANK hits (target
+        within `cone_radius` world units of the muzzle at fire time).
+        Symptom: "bullets not affecting other players" for any shot
+        beyond ~12 units. Root cause was that the design relied on the
+        VICTIM's local bullet sim catching the hit, but the broadcast
+        BULLET_SPAWN reaches the victim's Saturn ~100ms after fire,
+        the bullet then flies along the ORIGINAL aim direction, and
+        the victim has moved ~3-9 units off that aim point in the
+        meantime — so the local-sim collision misses too. Combined
+        with the muzzle-only cone check, no authority registered the
+        hit, no DAMAGE broadcast went out, no client saw HP drop.
+
+        Now: walk the bullet path forward in `step_units`-unit world
+        increments up to `max_range_units`, testing every alive non-
+        shooter target's REWOUND position (rewind_ticks ago) against
+        the bullet's current step. First hit wins. Forward-half-space
+        test at every step ensures the bullet only "hits" targets
+        ahead of its current position, not behind (so a target
+        standing behind the shooter when they fire forward isn't
+        treated as a hit).
+
+        Tuning rationale (open to admin-tunable later):
+          - cone_radius=12: matches the prior point-blank value;
+            client-side AABB has padded half-size 10 for remote
+            players (Player::Size 4 + NET_PAD 6), so 12 includes a
+            small margin for rewind-mismatch slop.
+          - step_units=4: half a Player::Size, guarantees no target
+            is skipped past between samples (any target within
+            cone_radius of the path will be within cone_radius of at
+            least one step's position).
+          - max_range_units=300: covers full-arena shots across a
+            ~256-unit map diagonal. Bullets that visually stop at
+            terrain in the local sim will still register a hit on the
+            server up to this range — over-hits past walls are rare
+            in tank-arena layouts and the user-facing trade-off is
+            far better than the current "shots don't register".
+
+        Known gap: the server has no terrain map, so an obstructed
+        shot through a wall would register a server hit but show no
+        visible impact on clients. Acceptable for now; the rare
+        "ghost hit" case is far less disruptive than the prior
+        "hits never register" baseline.
 
         Returns True if a hit was registered.
         """
         if self.match is None:
             return False
-        target_tick = self.match.server_tick - rewind_ticks
-        # Shift fxp 16.16 → world-unit ints once for the cone math.
-        # >> 16 truncates toward 0 — fine for relative deltas.
-        ox_w = ox >> 16
-        oy_w = oy >> 16
-        dx_w = dx >> 16
-        dy_w = dy >> 16
-        cone_r_sq = cone_radius * cone_radius
 
+        target_tick = self.match.server_tick - rewind_ticks
+        hit_r_sq = cone_radius * cone_radius
+        step_units = 4
+        n_steps = max_range_units // step_units + 1
+
+        # Pre-fetch each non-shooter target's REWOUND position in
+        # world units. Walking history newest→oldest, take the first
+        # entry whose tick is <= target_tick (i.e. recent enough to
+        # be the rewound sample). Empty history or all-too-recent
+        # history falls back to the deque's eldest entry, or to the
+        # current position if no history at all.
+        rewound = []
         for pid, p in self.game_players.items():
             if pid == shooter_pid: continue
             if not p.alive: continue
             # Don't validate against players who haven't sent their first
             # PLAYER_STATE — server has them at (0,0,0) which would yield
-            # a phantom point-blank hit at the arena corner.
+            # a phantom hit at the arena corner.
             if not p.state_received and not p.is_bot: continue
-            # Find the historical position closest to target_tick.
-            # Walk newest→oldest; keep the entry whose tick <= target,
-            # else fall back to the eldest available (deque was
-            # shorter than rewind_ticks early in the match).
-            tx, ty, tz = p.x, p.y, p.z
+            tx, ty = p.x, p.y
             if p.pos_history:
-                tx, ty, tz = p.pos_history[0][1], p.pos_history[0][2], p.pos_history[0][3]
+                tx, ty = p.pos_history[0][1], p.pos_history[0][2]
                 for entry in reversed(p.pos_history):
                     if entry[0] <= target_tick:
-                        tx, ty, tz = entry[1], entry[2], entry[3]
+                        tx, ty = entry[1], entry[2]
                         break
-            tx_w = tx >> 16
-            ty_w = ty >> 16
-            # Vector from bullet origin to (rewound) target
-            to_x = tx_w - ox_w
-            to_y = ty_w - oy_w
-            dist_sq = to_x * to_x + to_y * to_y
-            if dist_sq > cone_r_sq:
-                continue
-            # Forward-cone test: dot product of (to_target) with bullet
-            # direction must be > 0 (target ahead of barrel, not behind).
-            # Includes equal-position case (dist≈0, dot=0) → still hit
-            # (point-blank-on-top-of-target).
-            if dist_sq > 0:
-                dot = to_x * dx_w + to_y * dy_w
-                if dot < 0:
+            rewound.append((pid, p, tx >> 16, ty >> 16))
+
+        if not rewound:
+            return False
+
+        # Bullet position in fxp 16.16; advance by `step_units` world
+        # units per iteration. dx,dy are fxp 16.16 with magnitude
+        # 65536 (unit vector), so dx*step_units is fxp 16.16 of
+        # (step_units world units along x). Same for dy.
+        pos_x = ox
+        pos_y = oy
+        step_dx_fxp = dx * step_units
+        step_dy_fxp = dy * step_units
+
+        for i in range(n_steps):
+            bx_w = pos_x >> 16
+            by_w = pos_y >> 16
+            for pid, p, tx_w, ty_w in rewound:
+                ddx = tx_w - bx_w
+                ddy = ty_w - by_w
+                # Forward-half-space test: target must be ahead of
+                # the bullet's current heading (or coincident, dot=0).
+                # ddx,ddy are world units (~int8 magnitude); dx,dy
+                # are fxp 16.16 raw — the product is fxp scaled but
+                # we only check sign so the scale doesn't matter.
+                if ddx * dx + ddy * dy < 0:
                     continue
-            # === HIT ===
-            new_hp = max(0, p.hp - damage)
-            p.hp = new_hp
-            self._broadcast(build_damage(pid, shooter_pid, damage, new_hp))
-            log.info("LAG-COMP HIT: shooter=%d → victim=%d hp %d→%d "
-                     "(rewound %d ticks, dist²=%d/%d)",
-                     shooter_pid, pid, p.hp + damage, new_hp,
-                     rewind_ticks, dist_sq, cone_r_sq)
-            if new_hp == 0:
-                p.alive = False
-                p.deaths += 1
-                # Bump shooter's kill count (same client-attribution
-                # approach used elsewhere — server treats the shot
-                # source as the killer).
-                shooter = self.game_players.get(shooter_pid)
-                if shooter:
-                    shooter.kills += 1
-                self._broadcast(build_player_kill(pid, shooter_pid))
-                self._broadcast(build_score_update(
-                    pid, p.kills, p.deaths, max(p.hp, 0)))
-                if shooter:
-                    self._broadcast(build_score_update(
-                        shooter_pid, shooter.kills, shooter.deaths,
-                        max(shooter.hp, 0)))
-            return True
+                if ddx * ddx + ddy * ddy <= hit_r_sq:
+                    # === HIT ===
+                    new_hp = max(0, p.hp - damage)
+                    p.hp = new_hp
+                    self._broadcast(build_damage(pid, shooter_pid, damage, new_hp))
+                    log.info("LAG-COMP HIT: shooter=%d → victim=%d hp %d→%d "
+                             "(rewound %d ticks, step=%d/%d, dist²=%d/%d)",
+                             shooter_pid, pid, p.hp + damage, new_hp,
+                             rewind_ticks, i, n_steps,
+                             ddx * ddx + ddy * ddy, hit_r_sq)
+                    if new_hp == 0:
+                        p.alive = False
+                        p.deaths += 1
+                        shooter = self.game_players.get(shooter_pid)
+                        if shooter:
+                            shooter.kills += 1
+                        self._broadcast(build_player_kill(pid, shooter_pid))
+                        self._broadcast(build_score_update(
+                            pid, p.kills, p.deaths, max(p.hp, 0)))
+                        if shooter:
+                            self._broadcast(build_score_update(
+                                shooter_pid, shooter.kills, shooter.deaths,
+                                max(shooter.hp, 0)))
+                    return True
+            pos_x += step_dx_fxp
+            pos_y += step_dy_fxp
+
         return False
 
     def _tick_match(self, dt: float):
