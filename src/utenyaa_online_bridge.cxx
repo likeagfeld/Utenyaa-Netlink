@@ -217,21 +217,39 @@ static void cb_crate_destroy(uint8_t /*slot*/, uint8_t picker_id, uint8_t pickup
 }
 
 static void cb_damage(uint8_t victim_id, uint8_t /*attacker_id*/,
-                      uint8_t /*amount*/, uint8_t new_hp)
+                      uint8_t amount, uint8_t new_hp)
 {
     Entities::Player* p = find_player_by_pid(victim_id);
     if (!p) return;
-    /* Server is authoritative for damage. The earlier "ignore if
-     * isLocal && new_hp < current" guard was too aggressive — it
-     * ignored EVERY incoming damage broadcast (since taking damage
-     * always means new_hp < current), so local players never died
-     * from remote bullets and BigExplosion never fired on death.
-     * Operator: "whatever you did removed the super big explosions
-     * at player death". Reverted. The catgirl-charred-at-start
-     * issue must be addressed via a different mechanism (e.g., HUD
-     * reading from local sim, not network state, OR a server-side
-     * grace period for stall-detector damage). */
+
+    /* Targeted spurious-clamp guard. Server's "death echo" path
+     * (line ~2334 in userver.py) sends `build_damage(p.pid, 0xFF, 0, 0)`
+     * — amount=0, new_hp=0 — when it processes a CLIENT_DEATH from
+     * us. Normally this is harmless (local sim already at 0, delta=0
+     * no-op). But if the server's view of P2 thinks P2 should be
+     * dead even though our LOCAL sim hasn't died — symptom: catgirl
+     * P2 appears charred at match start — this DAMAGE(0,0) clamps
+     * our local Player.health from 6 to 0 in one frame. Operator
+     * reported this as "P2 sometimes still pre-charred at start of
+     * match" persistently across multiple builds.
+     *
+     * Targeted filter: only ignore (amount==0 && new_hp==0) when the
+     * victim is a LOCAL pid AND our local sim says they are alive
+     * (current > 0). Real bullet damage uses amount>0 and new_hp
+     * derived from real HP — never both zero. Death-echo from a
+     * legit local death has current==0 already, so the guard's
+     * `current > 0` check lets it pass through (delta == 0 anyway,
+     * still no-op). */
     int16_t current = p->GetHealth();
+    bool isLocal = ((uint8_t)victim_id == g_Game.myPlayerID) ||
+                   (g_Game.hasSecondLocal &&
+                    (uint8_t)victim_id == g_Game.myPlayerID2);
+    if (isLocal && amount == 0 && new_hp == 0 && current > 0)
+    {
+        unet_send_dbg_log("CKPT-D zero-zero clamp ignored");
+        return;
+    }
+
     int16_t delta = (int16_t)((int16_t)new_hp - current);
     if (delta != 0) p->HandleMessages(Messages::Damage(-delta));
 }
