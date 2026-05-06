@@ -161,19 +161,22 @@ void lobby_input(void)
         g_Game.input.pressedABC = false;
     }
 
-    /* START = request game start */
+    /* START = request game start. PURE start request — does NOT auto-
+     * toggle ready. The previous auto-ready logic ("if !server_says_
+     * ready && !unet_is_ready() then send_ready") could fire incorrectly
+     * after a match-end → lobby return: when the local optimistic
+     * my_ready flag and the server-broadcast lobby_players[].ready
+     * field were briefly out of sync, the guard occasionally evaluated
+     * to true even though the user had already pressed A to ready up,
+     * sending a redundant unet_send_ready() that the server interpreted
+     * as a TOGGLE — un-readying them. Operator-reported: "pressing
+     * start just un-readies my player and doesnt advance".
+     *
+     * Simple model now: user presses A (or C) to ready, START to
+     * advance. Server enforces the "all ready" check on START_GAME_REQ.
+     */
     if (jo_is_pad1_key_pressed(JO_KEY_START)) {
         if (!g_Game.input.pressedStart) {
-            const unet_state_data_t* nd = unet_get_data();
-            bool server_says_ready = false;
-            int k;
-            for (k = 0; k < nd->lobby_count; k++) {
-                if (nd->lobby_players[k].id == g_Game.myPlayerID) {
-                    server_says_ready = nd->lobby_players[k].ready;
-                    break;
-                }
-            }
-            if (!server_says_ready && !unet_is_ready()) unet_send_ready();
             unet_send_start_game();
         }
         g_Game.input.pressedStart = true;

@@ -221,7 +221,33 @@ static void cb_damage(uint8_t victim_id, uint8_t /*attacker_id*/,
 {
     Entities::Player* p = find_player_by_pid(victim_id);
     if (!p) return;
+
+    /* Local-player spurious-damage guard. Mirrors the cb_player_kill
+     * guard. The server's stall detector can broadcast DAMAGE for a
+     * pid that hasn't sent PLAYER_STATE within the match-start grace
+     * window — for our local co-op P2 (or P1) this fires before
+     * we've had a chance to send anything, clamping our local
+     * Player.health from full to 0 and producing the operator-
+     * reported "P2 sometimes pre-charred at start of game". The
+     * local sim is the authoritative source for our own players'
+     * HP; server-driven HP clamps below local sim's value should
+     * be IGNORED for local pids when the local sim hasn't taken any
+     * damage yet (i.e., we're still at full HP). The legit damage
+     * path for local players runs LOCAL hit-detection first → our
+     * own HP drop drives the next PLAYER_STATE → server reflects
+     * back via DAMAGE — by which point the new_hp matches our
+     * local current HP and the guard's "delta == 0" early-out
+     * makes it a no-op anyway. */
+    bool isLocal = ((uint8_t)victim_id == g_Game.myPlayerID) ||
+                   (g_Game.hasSecondLocal &&
+                    (uint8_t)victim_id == g_Game.myPlayerID2);
     int16_t current = p->GetHealth();
+    if (isLocal && (int16_t)new_hp < current)
+    {
+        unet_send_dbg_log("CKPT-D spurious local damage ignored");
+        return;
+    }
+
     int16_t delta = (int16_t)((int16_t)new_hp - current);
     if (delta != 0) p->HandleMessages(Messages::Damage(-delta));
 }
