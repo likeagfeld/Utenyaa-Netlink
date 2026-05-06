@@ -1321,11 +1321,20 @@ class UtenyaaServer:
     def _build_map_pick_list(self) -> list[dict]:
         """Combined list shown to clients:
             [0..3] = the four baked-in CD stages, source=0
-            [4..]  = every .UTE in the editor's maps dir, source=1
-        Author/name pulled from the JSON sidecar when available; falls
-        back to the slug if the sidecar is missing or malformed."""
+            [4..]  = every CUSTOM .UTE in the editor's maps dir, source=1
+        Author/name pulled from the JSON sidecar's meta.author / meta.name
+        (or top-level fallback) when available; falls back to the slug
+        if the sidecar is missing or malformed.
+
+        Custom maps whose slug matches a baked stage name (e.g. the
+        editor's seed copies of Island/Cross/Valley/Railway) are
+        SKIPPED — every Saturn already has those on its CD, so
+        streaming a duplicate would be a multi-second wait for bytes
+        the client would just discard. The user-visible Stage Pool
+        still uses the on-CD copy."""
         out = []
-        # 4 baked stages
+        # 4 baked stages — always present, indexed first so source=0
+        # entries cluster at the top of the list.
         for stage_id, name in enumerate(STAGE_NAMES):
             out.append({
                 "idx": len(out),
@@ -1336,6 +1345,8 @@ class UtenyaaServer:
                 "author": "ReyeMe / DannyDuarte",
                 "size_bytes": 0,
             })
+        baked_slugs = {n.lower() for n in STAGE_NAMES}
+
         # Custom maps from disk
         try:
             entries = sorted(os.listdir(self.editor_maps_dir))
@@ -1345,6 +1356,11 @@ class UtenyaaServer:
             if not fname.lower().endswith(".ute"):
                 continue
             slug = fname[:-4].lower()
+            # Skip seed/imported copies of the four baked stages —
+            # the Saturn already has them on CD; streaming a duplicate
+            # would be a wasted 7-8 s.
+            if slug in baked_slugs:
+                continue
             full = os.path.join(self.editor_maps_dir, fname)
             try:
                 size = os.path.getsize(full)
@@ -1356,8 +1372,12 @@ class UtenyaaServer:
             if os.path.isfile(sidecar):
                 try:
                     j = json.loads(open(sidecar, "r").read())
-                    display_name   = (j.get("name")   or display_name)[:UNET_MAP_NAME_MAX]
-                    display_author = (j.get("author") or "")[:UNET_MAP_AUTHOR_MAX]
+                    # Editor stores author/name under `meta` per
+                    # storage.level_to_json — also accept top-level
+                    # for forward-compat with future schema changes.
+                    meta = j.get("meta") or {}
+                    display_name   = (meta.get("name")   or j.get("name")   or display_name)[:UNET_MAP_NAME_MAX]
+                    display_author = (meta.get("author") or j.get("author") or "")[:UNET_MAP_AUTHOR_MAX]
                 except Exception:
                     pass
             out.append({
