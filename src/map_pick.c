@@ -31,7 +31,7 @@ unet_map_pick_t g_map_pick;
 /* Edge-detection state for input — pad polling fires every frame at
  * ~50 Hz (PAL); without rising-edge tracking a held UP/DOWN scrolls
  * past the entire list in 200 ms. */
-static bool s_was_up, s_was_down, s_was_a, s_was_start;
+static bool s_was_up, s_was_down, s_was_start;
 static bool s_screen_clear_pending = true;
 /* When MAP_PICK is entered, the operator's START press from the
  * lobby may still be held — without this guard the held button
@@ -39,9 +39,6 @@ static bool s_screen_clear_pending = true;
  * commits the pick. Track which controller buttons we should treat
  * as "already pressed" until they're physically released. */
 static bool s_swallow_held = true;
-/* Local "did I vote, and for what?" — for UI feedback. Doesn't
- * affect server-side tally. */
-static int  s_my_vote = -1;
 
 static void s_clamp_cursor_into_view(void)
 {
@@ -67,10 +64,9 @@ void map_pick_reset(void)
     /* Don't memset entries — keep the buffers but their `slug[0]=0`
      * marker is set on next on_list_begin/clear. Overwriting 64 ×
      * sizeof(entry) every reset is wasteful. */
-    s_was_up = s_was_down = s_was_a = s_was_start = false;
+    s_was_up = s_was_down = s_was_start = false;
     s_screen_clear_pending = true;
     s_swallow_held = true;
-    s_my_vote = -1;
 }
 
 /* Length-prefixed string copy: reads [u8 len][bytes...] from `p` at
@@ -118,7 +114,6 @@ void unet_map_pick_on_list_begin(const uint8_t* payload, int len)
      * commit on frame 1 of MAP_PICK. The user must physically
      * release every button before they're treated as new presses. */
     s_swallow_held = true;
-    s_my_vote = -1;
     unet_send_dbg_log("CKPT-MP1 list begin");
 }
 
@@ -166,14 +161,14 @@ void unet_map_pick_on_result(const uint8_t* payload, int len)
 }
 
 /* Draw a single list row at fixed grid position. Highlight if cursor
- * is on this row; mark with `*` if it's the committed winner; mark
- * with `+` if THIS player voted for it. */
+ * is on this row; mark with `*` if it's the committed winner. The
+ * old vote-tally column was removed — first-START-wins now, no
+ * voting mechanic. */
 static void s_draw_row(int viewport_row, int entry_idx)
 {
     int y = MAP_PICK_FIRST_ROW + viewport_row;
     bool is_cursor = (entry_idx == (int)g_map_pick.cursor);
     bool is_winner = (entry_idx == (int)g_map_pick.result_idx);
-    bool is_my_vote = (entry_idx == s_my_vote);
 
     if (entry_idx < 0 || entry_idx >= (int)g_map_pick.count) {
         /* Empty viewport slot — render blanks so any leftover glyphs
@@ -184,17 +179,19 @@ static void s_draw_row(int viewport_row, int entry_idx)
     }
 
     const unet_map_list_entry_t* e = &g_map_pick.entries[entry_idx];
-    char marker = is_winner ? '*' : (is_cursor ? '>' : (is_my_vote ? '+' : ' '));
-    /* Tight format that fits ~38 columns: marker(1) + name(16) +
-     * author(12) + "v=NN" (4) plus single-space gutters = 35 cols.
-     * Names/authors longer than the slot truncate to "%.NN" so the
-     * column boundaries are stable as the cursor moves. */
+    char marker = is_winner ? '*' : (is_cursor ? '>' : ' ');
+    /* Tight format ~38 columns: marker(1) + name(18) + author(14) +
+     * size(5) plus single-space gutters. Names/authors longer than
+     * the slot truncate so column boundaries are stable. Size in
+     * KB rounded for at-a-glance — useful when picking between
+     * multiple custom maps. */
+    int sz_kb = (int)((e->size_bytes + 512) / 1024);
     font_printf(FONT_X(MAP_PICK_ROW_X), FONT_Y(y), 540,
-                "%c%-16.16s %-12.12s v=%-2d",
+                "%c%-18.18s %-14.14s %2dKB",
                 marker,
                 e->name[0]   ? e->name   : e->slug,
                 e->author[0] ? e->author : "-",
-                (int)e->votes);
+                sz_kb);
 }
 
 void map_pick_draw(void)
@@ -215,7 +212,7 @@ void map_pick_draw(void)
         font_draw("(no maps yet - waiting for list...)",
                   FONT_X(2), FONT_Y(MAP_PICK_FIRST_ROW + 1), 540);
     } else {
-        font_draw(" NAME             AUTHOR       VOTE",
+        font_draw(" NAME               AUTHOR          SIZE",
                   FONT_X(MAP_PICK_ROW_X), FONT_Y(2), 540);
         for (int i = 0; i < MAP_PICK_VIEWPORT_ROWS; i++) {
             int entry_idx = (int)g_map_pick.scroll_top + i;
@@ -253,7 +250,7 @@ void map_pick_draw(void)
         font_draw("                                       ",
                   FONT_X(2), FONT_Y(25), 540);
     }
-    font_draw("UP/DOWN: scroll  A: vote  START: pick", FONT_X(1), FONT_Y(27), 540);
+    font_draw("UP/DOWN: scroll       START: load this map", FONT_X(1), FONT_Y(27), 540);
 }
 
 void map_pick_input(void)
@@ -284,23 +281,19 @@ void map_pick_input(void)
 
     bool up    = jo_is_input_key_pressed(0, JO_KEY_UP);
     bool down  = jo_is_input_key_pressed(0, JO_KEY_DOWN);
-    bool a     = jo_is_input_key_pressed(0, JO_KEY_A);
     bool start = jo_is_input_key_pressed(0, JO_KEY_START);
 
     /* "Swallow held" — until every button is physically released
      * (after entering MAP_PICK), treat all currently-pressed
      * buttons as already-handled. Without this, the still-held
      * lobby START fires an immediate Phase-2 commit on frame 1 of
-     * MAP_PICK, before the user has a chance to scroll/vote.
-     * Reported as: "transitions to map selection screen and seems
-     * to have already chosen a resulting map". */
+     * MAP_PICK, before the user has a chance to scroll. */
     if (s_swallow_held) {
-        if (!up && !down && !a && !start) {
+        if (!up && !down && !start) {
             s_swallow_held = false;
         }
         s_was_up    = up;
         s_was_down  = down;
-        s_was_a     = a;
         s_was_start = start;
         return;
     }
@@ -317,35 +310,18 @@ void map_pick_input(void)
         if (g_map_pick.cursor >= g_map_pick.count) g_map_pick.cursor = 0;
         s_clamp_cursor_into_view();
     }
-    /* A votes for the cursor's current map. The server tally update
-     * arrives back via MAP_PICK_TALLY broadcast and the local
-     * `s_my_vote` flips so the row gets a `+` marker for visual
-     * feedback (otherwise the only feedback was the v=N column,
-     * which clipped offscreen on the original layout). */
-    if (a && !s_was_a) {
-        unet_send_map_pick_vote(g_map_pick.cursor);
-        s_my_vote = (int)g_map_pick.cursor;
-    }
-    /* START commits — auto-vote for the cursor's current row first
-     * so a player who scrolled to their preference and pressed
-     * START without explicitly tapping A still gets their pick
-     * counted. Without this auto-vote, _commit_map_pick on the
-     * server falls back to a random map when no one voted —
-     * observed as "the level I selected isn't the one that
-     * loaded" because the user assumed cursor-position was their
-     * vote (it wasn't, A is the vote button). TCP order on the
-     * single client socket guarantees the VOTE arrives before the
-     * START_GAME_REQ, so the server records it before commit.
-     * Already-committed result blocks further START presses so a
-     * spammed button can't trigger spurious match-starts. */
+    /* No voting mechanic — first-START-wins. The presser's cursor
+     * is the chosen map. Send a VOTE for the cursor (so server
+     * knows what we picked) immediately followed by START_GAME_REQ
+     * (commits). TCP order guarantees the VOTE arrives first so
+     * the server's _commit_map_pick has exactly one tallied vote
+     * and picks the presser's chosen map deterministically. */
     if (start && !s_was_start && g_map_pick.result_idx == 0xFF) {
         unet_send_map_pick_vote(g_map_pick.cursor);
-        s_my_vote = (int)g_map_pick.cursor;
         unet_send_start_game();
     }
 
     s_was_up    = up;
     s_was_down  = down;
-    s_was_a     = a;
     s_was_start = start;
 }
