@@ -431,11 +431,21 @@ void lobby_draw(void)
         }
     }
 
-    /* Waiting / start gate */
+    /* Waiting / start gate.
+     *
+     * "PRESS START WHEN READY" is 22 chars and "WAITING FOR 2ND
+     * PLAYER..." is 25, so when font_draw_centered switches from
+     * WAITING to PRESS the centered column shifts by ~1.5 chars,
+     * leaving the leading 'W' from WAITING bleeding through at the
+     * left edge of the PRESS line ("WPRESS START..."). The text
+     * plane has no per-frame clear at this row, so prior content
+     * survives to the next draw. Pad both messages to identical
+     * 25-char width so they share the same centered start column
+     * and overwrite each other's footprint cleanly. */
     if (nd->lobby_count < UNET_MIN_TO_START) {
         font_draw_centered("WAITING FOR 2ND PLAYER...", FONT_Y(17), 500);
     } else {
-        font_draw_centered("PRESS START WHEN READY", FONT_Y(17), 500);
+        font_draw_centered(" PRESS START WHEN READY  ", FONT_Y(17), 500);
     }
 
     /* Last log line — pad to 38 chars so shorter text doesn't leak

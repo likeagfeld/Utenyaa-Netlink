@@ -83,6 +83,19 @@ namespace Entities
 		 */
 		uint8_t shootCoolDownTimeLeft;
 
+		/** @brief Latched fire request — set on A rising edge, cleared
+		 *  when fire actually executes after cooldown ends. Without
+		 *  this, an A press DURING cooldown was lost: rising edge fires
+		 *  on `push` register clear, but the fire was blocked by
+		 *  cooldown > 0; by the time cooldown reached 0, A was still
+		 *  held but there was no new rising edge to detect → no fire
+		 *  even though the operator clearly pressed A. Operator
+		 *  reported "sometimes pressing A to fire does nothing."
+		 *  The latch queues a single shot for after cooldown so a
+		 *  press that arrives mid-cooldown still produces a shot.
+		 */
+		bool pendingFire = false;
+
 		/** @brief What pickup player has
 		 */
 		Messages::Pickup::PickupType hasPickup = Messages::Pickup::PickupType::None;
@@ -106,15 +119,29 @@ namespace Entities
 				((uint8_t)this->controller == g_Game.myPlayerID) ||
 				(g_Game.hasSecondLocal && (uint8_t)this->controller == g_Game.myPlayerID2);
 
-			// Original upstream firing logic — IsControllerButtonDown
-			// is jo_engine's rising-edge detector (active-low on the
-			// SGL `push` field). Cooldown 0x1b = 27 frames matches
-			// upstream verbatim. The user reverted my held-button +
-			// shorter-cooldown experiment; original feel is preferred.
+			// Fire logic with pending-fire latch (see pendingFire docs
+			// above). Two-step:
+			//   1. ANY rising edge of A (jo_is_input_key_down via
+			//      IsControllerButtonDown) latches pendingFire = true.
+			//      Edges arriving DURING cooldown are not lost — they
+			//      sit in the latch waiting for cooldown to clear.
+			//   2. When cooldown reaches 0 AND pendingFire is set,
+			//      fire the bullet and clear the latch.
+			// Net effect for the operator: every A press produces a
+			// shot — never silently swallowed. Cooldown 0x1b (27
+			// frames ≈ 0.45 s) preserved verbatim from upstream so
+			// rapid-fire feel is unchanged; the latch only fixes the
+			// "press during cooldown does nothing" miss.
 			if (isLocalCtrl &&
-				Helpers::IsControllerButtonDown(this->controller, JO_KEY_A) &&
+				Helpers::IsControllerButtonDown(this->controller, JO_KEY_A))
+			{
+				this->pendingFire = true;
+			}
+			if (isLocalCtrl &&
+				this->pendingFire &&
 				this->shootCoolDownTimeLeft == 0)
 			{
+				this->pendingFire = false;
 				PoneSound::Sound::Play(1, PoneSound::PlayMode::Semi, 5);
 				this->shootCoolDownTimeLeft = 0x1b;
 				new Entities::Bullet(this->controller, movementDir, this->position);
