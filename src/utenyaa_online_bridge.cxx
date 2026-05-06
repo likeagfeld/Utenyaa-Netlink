@@ -222,10 +222,53 @@ static void cb_player_kill(uint8_t victim_id, uint8_t /*attacker_id*/)
      * "dead" state to the HUD reliably regardless of what local sim
      * did or didn't see. */
     Entities::Player* p = find_player_by_pid(victim_id);
-    if (p && p->GetHealth() > 0)
+    if (!p) return;
+    bool transition_to_dead = (p->GetHealth() > 0);
+    if (transition_to_dead)
     {
         const int16_t curHp = p->GetHealth();
         p->HandleMessages(Messages::Damage(curHp));
+    }
+
+    /* Dramatic destruction visual — without this, the upstream death
+     * was just an instant body-tip + head-sprite swap, which:
+     *   (a) could be missed entirely in a busy 4-player match, and
+     *   (b) made spurious deaths from a network stall look identical
+     *       to a legitimate kill, leaving the operator unsure whether
+     *       a player they thought was alive had been ruled dead.
+     * Three staggered Explosion entities at slight world offsets give
+     * a fireball cluster — the existing 6-frame Explosion sprite
+     * (Explosion.hpp, FrameTime=0.1s × 6 frames = 0.6s total) cycles
+     * through cleanly, and offset positions add visual width so the
+     * effect reads as "tank obliterated" instead of "tiny puff".
+     * Scales 2.5/2.0/1.5 are 8-10× the bullet-impact explosion's
+     * default scale of 0.25 — far more visible at the player's
+     * camera distance.
+     *
+     * Only spawn on the alive→dead TRANSITION so a duplicate
+     * PLAYER_KILL from the server (e.g., from CLIENT_DEATH path
+     * AFTER lag-comp DAMAGE already killed them) doesn't double-
+     * spawn explosions. */
+    if (transition_to_dead)
+    {
+        Vec3 pos = p->GetPosition();
+        Vec3 c1 = pos;
+        Vec3 c2 = Vec3(pos.x + Fxp::FromInt(3),
+                       pos.y + Fxp::FromInt(2),
+                       pos.z + Fxp::FromInt(2));
+        Vec3 c3 = Vec3(pos.x - Fxp::FromInt(2),
+                       pos.y - Fxp::FromInt(3),
+                       pos.z + Fxp::FromInt(4));
+        Fxp big = Fxp(2.5);
+        Fxp med = Fxp(1.5);
+        new Entities::Explosion(c1, big);
+        new Entities::Explosion(c2, med);
+        new Entities::Explosion(c3, big);
+        /* Reuse channel 1 (bullet/fire SFX) at higher pitch for a
+         * heavier "boom" without needing new audio assets. PoneSound
+         * Semi mode lets the sound interrupt itself, so multi-kill
+         * rapid-fire deaths still produce one impact per kill. */
+        PoneSound::Sound::Play(1, PoneSound::PlayMode::Semi, 7);
     }
 }
 
