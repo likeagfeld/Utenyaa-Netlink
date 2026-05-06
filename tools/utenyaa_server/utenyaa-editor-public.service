@@ -1,5 +1,5 @@
 [Unit]
-Description=Utenyaa Web Map Editor
+Description=Utenyaa Web Map Editor — public read/save (no admin, no delete)
 After=network.target
 
 [Service]
@@ -7,11 +7,11 @@ Type=simple
 User=gary
 WorkingDirectory=/opt/utenyaa-editor
 Environment=UTENYAA_EDITOR_HOST=127.0.0.1
-Environment=UTENYAA_EDITOR_PORT=9095
-# Behind the saturncoup admin portal's basic-auth gate every visitor
-# is already trusted — auto-grant admin so destructive ops work
-# without a redundant in-editor login modal.
-Environment=UTENYAA_AUTO_ADMIN=1
+Environment=UTENYAA_EDITOR_PORT=9096
+Environment=UTENYAA_PUBLIC_MODE=1
+# Shared maps directory with the admin instance — both write to the
+# same pool so authored maps from either path are immediately
+# available to the Saturn server's streamer.
 Environment=UTENYAA_MAPS_DIR=/opt/utenyaa-editor/webapp/maps
 Environment=UTENYAA_TERRAIN_PAK=/opt/utenyaa-editor/reference_pak/TERRAIN.PAK
 Environment=UTENYAA_MODELS_DIR=/opt/utenyaa-editor/reference_models

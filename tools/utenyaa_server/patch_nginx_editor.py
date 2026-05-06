@@ -29,6 +29,24 @@ BLOCK = """    # Utenyaa Web Map Editor (proxied behind admin auth).
         client_max_body_size 256k;
     }
 
+    # PUBLIC Utenyaa Web Map Editor — no auth, separate Flask process
+    # in PUBLIC_MODE so admin endpoints (delete) are 403 regardless
+    # of session. Same maps directory as the admin instance so any
+    # map authored here is instantly available to the Saturn streamer.
+    # Same ^~ rationale as above.
+    location = /mapeditor { return 301 /mapeditor/; }
+    location ^~ /mapeditor/ {
+        proxy_pass http://127.0.0.1:9096/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 30s;
+        client_max_body_size 256k;
+    }
+
 """
 
 with open(CONFIG, "r") as f:
