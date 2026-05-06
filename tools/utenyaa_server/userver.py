@@ -532,7 +532,8 @@ class Crate:
 
 
 class MatchState:
-    def __init__(self, stage_id: int, match_seconds: int, seed: int):
+    def __init__(self, stage_id: int, match_seconds: int, seed: int,
+                 streamed: bool = False, stream_chunks: int = 0):
         self.stage_id = stage_id
         self.match_seconds_total = match_seconds
         self.match_seconds_left = match_seconds
@@ -548,6 +549,23 @@ class MatchState:
         # tracked by SERVER_TICK_RATE consumers). 32-bit wide; matches don't
         # last 36+ minutes so wrap is irrelevant.
         self.server_tick = 0
+        # Streaming-aware stall grace. For non-streamed matches the
+        # default 100-tick (5 s) grace catches black-screened clients
+        # quickly. For STREAMED matches, the Saturn is busy draining
+        # MAP_CHUNK frames for several seconds before it can send its
+        # first PLAYER_STATE — using the 5 s threshold there causes
+        # the stall detector to mark the player dead BEFORE gameplay
+        # even begins (observed in 0.6 hardware test). Bump grace to
+        # cover stream wire time + 5 s safety: 14.4k baud = 1440 B/s,
+        # so an N-chunk stream needs at most 8.5 ms × N seconds plus
+        # the chunk header overhead. Round up generously: 0.1 s/chunk
+        # + 5 s safety. Stored on MatchState so _tick_match doesn't
+        # need to re-derive every tick.
+        self.streamed = streamed
+        self.stall_grace_ticks = (
+            int(stream_chunks * 0.1 * SERVER_TICK_RATE) + 100
+            if streamed else 100
+        )
 
     def alloc_entity_id(self) -> int:
         eid = self.next_entity_id
@@ -1275,7 +1293,16 @@ class UtenyaaServer:
         # so matches always have crates. (The streamed .UTE itself
         # carries entity data inline — server crates are independent.)
         ms_stage = stage if stage != UNET_STAGE_STREAMED else 0
-        self.match = MatchState(ms_stage, self.match_seconds, seed)
+        # When streaming, pass the chunk count so MatchState can size
+        # its stall-grace window to cover the stream wire time. Without
+        # this, the 5-s default grace fires DURING streaming and marks
+        # all players dead before gameplay starts (0.6 hardware bug).
+        stream_chunks = 0
+        if stage == UNET_STAGE_STREAMED and live_bytes is not None:
+            stream_chunks = (len(live_bytes) + UNET_MAP_CHUNK_DATA_MAX - 1) // UNET_MAP_CHUNK_DATA_MAX
+        self.match = MatchState(ms_stage, self.match_seconds, seed,
+                                streamed=(stage == UNET_STAGE_STREAMED),
+                                stream_chunks=stream_chunks)
         self.match.crates = [Crate(x["slot"], x["flags"], x["x"], x["y"], x["z"])
                              for x in build_crate_roster(ms_stage)]
 
@@ -1560,12 +1587,14 @@ class UtenyaaServer:
         self.match.server_tick += 1
 
         # Stalled-player liveness check. If a real (non-bot) player
-        # hasn't sent a single PLAYER_STATE 5 s into the match, their
-        # client black-screened during the LOBBY → GAMEPLAY transition.
-        # Mark them dead so the alive_count condition below can fire and
-        # the match ends rather than running 120 s waiting for someone
-        # who isn't there.
-        STALL_GRACE_TICKS = 100  # 5 s @ SERVER_TICK_RATE=20
+        # hasn't sent a single PLAYER_STATE within the grace window,
+        # their client black-screened during the LOBBY → GAMEPLAY
+        # transition. Mark them dead so the alive_count condition
+        # below can fire and the match ends rather than running 120 s
+        # waiting for someone who isn't there.
+        # Grace window is per-match: short for CD-baked stages, longer
+        # for streamed matches (Saturn busy receiving MAP_CHUNKs).
+        STALL_GRACE_TICKS = self.match.stall_grace_ticks
         if self.match.server_tick == STALL_GRACE_TICKS:
             for pid, p in self.game_players.items():
                 if p.is_bot: continue
