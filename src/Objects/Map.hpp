@@ -334,25 +334,37 @@ namespace Objects
 		this->mapMesh = Mesh3D((Map::MapDimensionSize + 1) * (Map::MapDimensionSize + 1), Map::MapDimensionSize * Map::MapDimensionSize);
 		unet_send_dbg_log("CKPT-M3 Map mesh-init");
 
-		/* One-shot diagnostic: log the raw byte + decoded rotation +
-		 * decoded depth for two representative tiles so the operator
-		 * can confirm the .UTE actually contains the rotation values
-		 * they set in the editor. ALSO log sizeof(Tile) — if GCC has
-		 * laid the struct out wider than 4 bytes due to bitfield
-		 * int-storage, every tile beyond the first reads from a wrong
-		 * offset and rotation would always look like 0 (or whatever
-		 * happens to be at the misaligned address). */
+		/* Full-map diagnostic. Histograms how many of the 400 tiles
+		 * land in each rotation bucket as decoded by the bitfield
+		 * (level->TileData[i].Rotation, the path the parser actually
+		 * uses) AND by explicit-byte read (tileBytePtr[0] >> 6).
+		 * Sampled-tile output (the previous version) missed the bug
+		 * because tiles 0 and 5 happened to be unrotated grass —
+		 * the rotated tiles live deeper in the array.
+		 *
+		 * On the server, audit-script results show the .UTE files
+		 * DO contain rotation values (e.g., dansfield.UTE: 354 r=0,
+		 * 18 r=1, 13 r=2, 15 r=3). If the engine's histogram disagrees
+		 * — especially if BITFIELD differs from EXPLICIT — we've
+		 * proven the bitfield ordering is the active bug. Stride is
+		 * also reported so we know if struct packing is right.
+		 */
 		{
-			const uint8_t* tb_a = reinterpret_cast<const uint8_t*>(&level->TileData[0]);
-			const uint8_t* tb_b = reinterpret_cast<const uint8_t*>(&level->TileData[5]);
 			const int stride = (int)(reinterpret_cast<const uint8_t*>(&level->TileData[1])
 			                       - reinterpret_cast<const uint8_t*>(&level->TileData[0]));
-			char buf[64];
+			int bf_hist[4]  = {0,0,0,0};
+			int exp_hist[4] = {0,0,0,0};
+			for (int i = 0; i < Map::MapDimensionSize * Map::MapDimensionSize; i++) {
+				bf_hist[level->TileData[i].Rotation & 3]++;
+				const uint8_t* tb = reinterpret_cast<const uint8_t*>(&level->TileData[i]);
+				exp_hist[(tb[0] >> 6) & 3]++;
+			}
+			char buf[80];
 			snprintf(buf, sizeof(buf),
-			         "TILE_DBG sz=%d t0=%02x r%d d%d t5=%02x r%d d%d",
+			         "TILE_HIST sz=%d bf=%d/%d/%d/%d exp=%d/%d/%d/%d",
 			         stride,
-			         tb_a[0], (tb_a[0] >> 6) & 3, tb_a[0] & 0x0F,
-			         tb_b[0], (tb_b[0] >> 6) & 3, tb_b[0] & 0x0F);
+			         bf_hist[0], bf_hist[1], bf_hist[2], bf_hist[3],
+			         exp_hist[0], exp_hist[1], exp_hist[2], exp_hist[3]);
 			unet_send_dbg_log(buf);
 		}
 

@@ -119,30 +119,18 @@ namespace Entities
 				((uint8_t)this->controller == g_Game.myPlayerID) ||
 				(g_Game.hasSecondLocal && (uint8_t)this->controller == g_Game.myPlayerID2);
 
-			// Fire logic with pending-fire latch + held-state backstop.
-			// Operator: "shooting still is non-responsive on A button
-			// presses occasionally" — even after the pending-latch fix.
-			// Three failure modes pendingFire alone doesn't catch:
-			//   (a) SMPC peripheral poll missed the rising edge entirely
-			//       (controller bounce, fast tap < 1 frame, peripheral
-			//        timing skew) — no edge ever fires, so the latch
-			//        never engages.
-			//   (b) Operator holds A expecting auto-repeat fire — edge-
-			//       only never fires after the first shot until they
-			//       release+repress.
-			//   (c) Long press across cooldown — same as (b).
-			// Fix: latch on EITHER edge OR currently-held. Held-state
-			// alone gives effective auto-fire at cooldown rate (1 shot
-			// per 0x1b = 27 frames ≈ 0.45 s); edge captures fast taps
-			// that would miss the held-frame check. Combined, every
-			// press path produces a shot. Cooldown 0x1b preserved
-			// verbatim — feel of one shot per ~0.45s when held is
-			// unchanged from edge-with-cooldown rate.
-			const bool aEdge =
-				Helpers::IsControllerButtonDown(this->controller, JO_KEY_A);
-			const bool aHeld =
-				Helpers::IsControllerButtonPressed(this->controller, JO_KEY_A);
-			if (isLocalCtrl && (aEdge || aHeld))
+			// Fire logic with pending-fire latch only. Operator:
+			// "bullets are firing now even before cooldown ends" —
+			// the held-state backstop I'd added was firing on every
+			// frame A is held, which combined with the latch let an
+			// in-progress release-and-quickly-repress cycle slip a
+			// shot in faster than 0x1b frames if the rebuild-pending
+			// state survived the cooldown decrement. Reverting to
+			// edge-only with the pending-fire latch — the latch
+			// alone solves "press during cooldown lost" without
+			// touching the cooldown gate.
+			if (isLocalCtrl &&
+				Helpers::IsControllerButtonDown(this->controller, JO_KEY_A))
 			{
 				this->pendingFire = true;
 			}
