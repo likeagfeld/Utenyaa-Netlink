@@ -624,10 +624,23 @@ class MatchState:
         # + 5 s safety. Stored on MatchState so _tick_match doesn't
         # need to re-derive every tick.
         self.streamed = streamed
-        self.stall_grace_ticks = (
-            int(stream_chunks * 0.1 * SERVER_TICK_RATE) + 100
-            if streamed else 100
-        )
+        # Stall grace tuned generously after observed "P2 renders as
+        # charred at start of game" — the stall detector was firing
+        # for a remote player whose Saturn took marginally longer to
+        # send its first PLAYER_STATE (slower modem connection,
+        # slower CD spin, in-flight chunk-decode etc.). Cost of being
+        # generous: a black-screened client now takes 15 s to detect
+        # instead of 5 s — operator can still kick manually via the
+        # admin portal before then.
+        if streamed:
+            # Stream wire time (~0.1 s per chunk @ 14.4k baud) + parse
+            # + first PLAYER_STATE round-trip + 10 s safety. The 10 s
+            # absorbs modem-buffer drain variance between clients.
+            self.stall_grace_ticks = (
+                int(stream_chunks * 0.15 * SERVER_TICK_RATE) + 200
+            )
+        else:
+            self.stall_grace_ticks = 300   # 15 s — covers slow CD reads, post-MAP_PICK transition jitter
 
     def alloc_entity_id(self) -> int:
         eid = self.next_entity_id
