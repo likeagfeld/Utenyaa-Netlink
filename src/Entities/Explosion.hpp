@@ -95,52 +95,78 @@ namespace Entities
 		}
 	};
 
-	/** @brief Three-explosion sequencer — for player death + bomb hits.
+	/** @brief Multi-stage HUGE explosion sequencer — for player death
+	 *  + bomb hits. Operator directive: "I want a HUGE BIG BANG
+	 *  EXPLOSION, fully obvious what happened."
 	 *
 	 * A single regular Explosion is too easy to miss in a busy match
 	 * (one 0.6 s sprite cycle at scale 0.25). For dramatic destruction
-	 * events (tank obliterated, bomb shot) we want a fireball CLUSTER:
-	 * three big explosions spawned at staggered times AND staggered
-	 * world offsets so the silhouette covers the entity for ~1 s.
+	 * events (tank obliterated, bomb shot) we spawn a fireball CLUSTER
+	 * of FIVE explosions at scaled-up sizes and staggered world
+	 * offsets in all four cardinal directions plus center, so the
+	 * silhouette completely engulfs the entity for ~1.1 s.
 	 *
-	 * Stages:
-	 *   t = 0.00 s  →  Explosion at center,           scale 2.5
-	 *   t = 0.18 s  →  Explosion at +X,-Y,+Z offset,  scale 2.0
-	 *   t = 0.36 s  →  Explosion at -X,+Y,+Z offset,  scale 2.5
-	 * After stage 2 spawns, this sequencer self-deletes; the spawned
+	 * Stages (each Explosion has its own 0.6 s sprite-cycle lifetime):
+	 *   t = 0.00 s  →  CENTER,             scale 3.5  (+0.5 z)
+	 *   t = 0.12 s  →  +X / -Y offset,     scale 3.0  (+1.5 z)
+	 *   t = 0.24 s  →  -X / +Y offset,     scale 3.5  (+2.5 z)
+	 *   t = 0.36 s  →  -X / -Y offset,     scale 3.0  (+1.0 z)
+	 *   t = 0.48 s  →  +X / +Y offset,     scale 3.5  (+2.0 z)
+	 *
+	 * After stage 4 spawns, this sequencer self-deletes; the spawned
 	 * Explosion entities continue their own frame cycle independently
 	 * (each lives 0.6 s = 6 frames × FrameTime). Total visible cluster
-	 * = ~1.0 s (last spawn + last frame's lifetime).
+	 * = ~1.08 s (last spawn at 0.48 s + 0.6 s lifetime).
+	 *
+	 * The earlier 3-stage / 2.5-max-scale version was still being
+	 * reported as "not obvious enough" — bumped to 5 stages and
+	 * 3.5 max scale for unmistakable destruction feedback.
 	 *
 	 * Not renderable itself — only updates a timer and spawns. Lives
-	 * for ~0.36 s before deleting itself.
+	 * for ~0.48 s before deleting itself.
 	 */
 	struct BigExplosion : public IUpdatable, TrackableObject<Entities::BigExplosion>
 	{
 	private:
 		Vec3   center;
 		Fxp    timer;
-		int    stage;   /* 0 = pending stage 1 spawn, 1 = pending stage 2, 2 = done */
+		int    stage;   /* next stage index to spawn (1..4); 5 = done */
 
 		void spawnStage(int n)
 		{
 			Vec3 pos = this->center;
-			Fxp  scale = Fxp(2.5);
-			if (n == 0) {
-				pos.z = pos.z + Fxp(2.0);
-				scale = Fxp(2.5);
-			} else if (n == 1) {
-				pos.x = pos.x + Fxp(2.5);
-				pos.y = pos.y - Fxp(1.5);
-				pos.z = pos.z + Fxp(3.5);
-				scale = Fxp(2.0);
-			} else if (n == 2) {
-				pos.x = pos.x - Fxp(2.0);
-				pos.y = pos.y + Fxp(2.5);
-				pos.z = pos.z + Fxp(3.0);
-				scale = Fxp(2.5);
-			} else {
-				return;
+			Fxp  scale = Fxp(3.5);
+			switch (n) {
+				case 0:  /* center */
+					pos.z = pos.z + Fxp(0.5);
+					scale = Fxp(3.5);
+					break;
+				case 1:  /* +X -Y */
+					pos.x = pos.x + Fxp(3.5);
+					pos.y = pos.y - Fxp(3.0);
+					pos.z = pos.z + Fxp(1.5);
+					scale = Fxp(3.0);
+					break;
+				case 2:  /* -X +Y */
+					pos.x = pos.x - Fxp(3.0);
+					pos.y = pos.y + Fxp(3.5);
+					pos.z = pos.z + Fxp(2.5);
+					scale = Fxp(3.5);
+					break;
+				case 3:  /* -X -Y */
+					pos.x = pos.x - Fxp(3.5);
+					pos.y = pos.y - Fxp(3.5);
+					pos.z = pos.z + Fxp(1.0);
+					scale = Fxp(3.0);
+					break;
+				case 4:  /* +X +Y */
+					pos.x = pos.x + Fxp(3.0);
+					pos.y = pos.y + Fxp(3.0);
+					pos.z = pos.z + Fxp(2.0);
+					scale = Fxp(3.5);
+					break;
+				default:
+					return;
 			}
 			new Entities::Explosion(pos, scale);
 		}
@@ -152,24 +178,37 @@ namespace Entities
 		BigExplosion(Vec3& centerRef) : center(centerRef)
 		{
 			this->timer = Fxp(0.0);
-			this->stage = 0;
 			/* Stage 0 fires immediately on construction so the boom
 			 * starts on the same frame as the death event. */
 			this->spawnStage(0);
-			this->stage = 1;
+			this->stage = 1;  /* next stage to spawn */
 		}
 
 		void Update() override
 		{
 			this->timer += Fxp::BuildRaw(delta_time);
-			if (this->stage == 1 && this->timer >= Fxp(0.18))
+			/* Spawn one stage per ~0.12 s tick. Each stage check is
+			 * triggered when the timer crosses the cumulative threshold
+			 * (0.12, 0.24, 0.36, 0.48) AND we're still pending that
+			 * stage. Self-delete after stage 4. */
+			if (this->stage == 1 && this->timer >= Fxp(0.12))
 			{
 				this->spawnStage(1);
 				this->stage = 2;
 			}
-			else if (this->stage == 2 && this->timer >= Fxp(0.36))
+			else if (this->stage == 2 && this->timer >= Fxp(0.24))
 			{
 				this->spawnStage(2);
+				this->stage = 3;
+			}
+			else if (this->stage == 3 && this->timer >= Fxp(0.36))
+			{
+				this->spawnStage(3);
+				this->stage = 4;
+			}
+			else if (this->stage == 4 && this->timer >= Fxp(0.48))
+			{
+				this->spawnStage(4);
 				delete this;
 				return;
 			}

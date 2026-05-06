@@ -94,6 +94,18 @@ static int  s_player_state_cooldown_p2;
 static bool s_sent_death;
 static bool s_sent_death_p2;
 
+/* Per-pid "BigExplosion already spawned for this death" flag. The
+ * old transition_to_dead-gated spawn missed the LOCAL player's own
+ * death entirely: by the time PLAYER_KILL arrives back from the
+ * server, our local sim has already zeroed health, so the alive→
+ * dead transition reads false and we skip the visual. Symptom: the
+ * player who died sees no fireball over their own tank — only
+ * remote-player deaths got the BigExplosion. Fix: spawn ONCE per
+ * pid per match, gated on this flag instead of the transition.
+ * Reset cleared on match start (Install / cb_game_over / TickMatchEndPause).
+ */
+static bool s_kill_visualized[UNET_MAX_PLAYERS];
+
 /*============================================================================
  * Server → client event callbacks
  *============================================================================*/
@@ -260,17 +272,23 @@ static void cb_player_kill(uint8_t victim_id, uint8_t /*attacker_id*/)
         p->HandleMessages(Messages::Damage(curHp));
     }
 
-    /* Dramatic destruction visual — three staggered explosions
-     * spawned by BigExplosion (~1.0s of fireball cluster) so a
-     * tank obliteration is unmistakable. Gated on the alive→dead
-     * transition so a duplicate PLAYER_KILL doesn't double-spawn. */
-    if (transition_to_dead)
+    /* Dramatic destruction visual — multi-stage huge fireball cluster
+     * (~1.2 s) so a tank obliteration is unmistakable. Gated on a
+     * per-pid "already spawned for this death" flag (cleared on
+     * match start) instead of the alive→dead transition, because
+     * for the LOCAL player the local sim has already zeroed health
+     * by the time PLAYER_KILL arrives — transition_to_dead reads
+     * false and the visual would be skipped. The flag handles
+     * dedupe of any duplicate PLAYER_KILL broadcasts. */
+    if (victim_id < UNET_MAX_PLAYERS && !s_kill_visualized[victim_id])
     {
+        s_kill_visualized[victim_id] = true;
         Vec3 pos = p->GetPosition();
         new Entities::BigExplosion(pos);
         /* Reuse channel 1 (bullet/fire SFX) at higher pitch for a
          * heavier "boom" without needing new audio assets. */
         PoneSound::Sound::Play(1, PoneSound::PlayMode::Semi, 7);
+        unet_send_dbg_log("CKPT-K BigExplosion spawned");
     }
 }
 
@@ -310,6 +328,7 @@ static void cb_game_over(uint8_t winner_id, bool sudden)
     s_sent_death_p2 = false;
     s_player_state_cooldown = 0;
     s_player_state_cooldown_p2 = 0;
+    for (int i = 0; i < UNET_MAX_PLAYERS; i++) s_kill_visualized[i] = false;
 }
 
 void OnlineBridge::Install()
@@ -773,6 +792,7 @@ void OnlineBridge::TickMatchEndPause()
     s_sent_death_p2 = false;
     s_player_state_cooldown = 0;
     s_player_state_cooldown_p2 = 0;
+    for (int i = 0; i < UNET_MAX_PLAYERS; i++) s_kill_visualized[i] = false;
     /* Forward decl-trick to poison TickLocalPlayers' static seed cache
      * isn't needed because that static initializes only once. Instead
      * we set a sentinel via the public path: leave s_last_game_seed
