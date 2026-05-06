@@ -387,8 +387,22 @@ namespace Objects
 				int depth = (depths[0] + depths[1] + depths[2] + depths[3]) / 4;
 				this->tileHeights[currentTile] = depth;
 
-				// TODO: support tile rotation
-				int baseIndex = 3 - level->TileData[currentTile].Rotation;
+				/* Read rotation explicitly from the raw byte rather than
+				 * via the C bitfield. The struct declares
+				 *    unsigned char Rotation : 2;  // intended bits 7-6
+				 *    unsigned char Depth    : 6;  // intended bits 5-0
+				 * but GCC's bitfield-packing order for big-endian SH-2
+				 * is implementation-defined and produced LSB-first
+				 * decoding here — Rotation was being read from bits
+				 * 1-0 (always 0 for tiles with depth < 4), so editor
+				 * rotation changes had ZERO visible effect on Saturn.
+				 * Editor packs the byte as `(rot<<6) | (mir<<4) |
+				 * depth_low4`, so reading bits 7-6 directly is
+				 * compiler-order-independent and matches the editor. */
+				const uint8_t* tileBytePtr =
+					reinterpret_cast<const uint8_t*>(&level->TileData[currentTile]);
+				const uint8_t rotation_explicit = (tileBytePtr[0] >> 6) & 0x03;
+				int baseIndex = 3 - rotation_explicit;
 
 				for (size_t vertex = 0; vertex < 4; vertex++)
 				{
@@ -486,10 +500,26 @@ namespace Objects
 				int px2Min = JO_MIN(px2, dim);
 				int tileX2 = JO_MAX(px2Min, 0);
 
-				result[0] = ((int32_t)data->TileData[Map::GetTileIndex(tileX1, tileY1)].Depth << 14);
-				result[1] = ((int32_t)data->TileData[Map::GetTileIndex(tileX1, tileY2)].Depth << 14);
-				result[2] = ((int32_t)data->TileData[Map::GetTileIndex(tileX2, tileY2)].Depth << 14);
-				result[3] = ((int32_t)data->TileData[Map::GetTileIndex(tileX2, tileY1)].Depth << 14);
+				/* Same explicit-bit-read pattern as the rotation fix
+				 * elsewhere in this file. Editor packs the byte as
+				 * `(rot<<6) | (mir<<4) | (depth & 0x0F)` so the
+				 * authoritative depth bits are 0-3 (4 bits). The
+				 * struct's `Depth : 6` bitfield can read them via
+				 * GCC's compiler-dependent ordering — which has been
+				 * decoding incorrectly here on sh2eb-elf-gcc. Using
+				 * explicit bit math eliminates the ambiguity. */
+				const uint8_t* tb0 = reinterpret_cast<const uint8_t*>(
+					&data->TileData[Map::GetTileIndex(tileX1, tileY1)]);
+				const uint8_t* tb1 = reinterpret_cast<const uint8_t*>(
+					&data->TileData[Map::GetTileIndex(tileX1, tileY2)]);
+				const uint8_t* tb2 = reinterpret_cast<const uint8_t*>(
+					&data->TileData[Map::GetTileIndex(tileX2, tileY2)]);
+				const uint8_t* tb3 = reinterpret_cast<const uint8_t*>(
+					&data->TileData[Map::GetTileIndex(tileX2, tileY1)]);
+				result[0] = ((int32_t)(tb0[0] & 0x0F)) << 14;
+				result[1] = ((int32_t)(tb1[0] & 0x0F)) << 14;
+				result[2] = ((int32_t)(tb2[0] & 0x0F)) << 14;
+				result[3] = ((int32_t)(tb3[0] & 0x0F)) << 14;
 			}
 		}
 	}
