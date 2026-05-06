@@ -16,6 +16,7 @@
 #include "net/utenyaa_net.h"
 #include "net/utenyaa_map_stream.h"
 #include "net/utenyaa_protocol.h"   /* UNET_STAGE_STREAMED */
+#include "map_pick.h"
 #include "utenyaa_online_bridge.hpp"
 #include "Entities/Player.hpp"
 

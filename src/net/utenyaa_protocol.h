@@ -66,6 +66,7 @@ extern "C" {
 #define UNET_MSG_STAGE_LOADED_ACK  0x23  /* No payload - all peers ACK before GAME_START */
 #define UNET_MSG_CHARACTER_SELECT_P2 0x24 /* [player_id:1][char_id:1] */
 #define UNET_MSG_CLIENT_DBG_LOG    0x25  /* [len:1][text:N] - free-form debug trace, server logs to journal */
+#define UNET_MSG_MAP_PICK_VOTE     0x26  /* [idx:1] - vote for a map in the lobby pick list */
 
 /*============================================================================
  * Utenyaa Server -> Client Opcodes (0xA0-0xBF)
@@ -137,6 +138,28 @@ static inline int16_t unet_d_angle(uint8_t q) { return (int16_t)(((uint16_t)q) <
 #define UNET_MSG_MAP_BEGIN         0xB8  /* [total_size:2 BE][num_chunks:1][crc16:2 BE] */
 #define UNET_MSG_MAP_CHUNK         0xB9  /* [chunk_idx:1][len:1][data:N] */
 #define UNET_MSG_MAP_END           0xBA  /* No payload */
+
+/* In-lobby map selection — first START_GAME_REQ from any player puts
+ * EVERY in-game client into UGAME_STATE_MAP_PICK and the server pushes
+ * a list of all maps (4 baked stages + every custom .UTE on disk) via
+ * MAP_LIST_BEGIN + N × MAP_LIST_ITEM. Players scroll, vote (sends back
+ * UNET_MSG_MAP_PICK_VOTE 0x26), and any subsequent START_GAME_REQ
+ * commits the highest-voted map (broadcast as MAP_PICK_RESULT, then
+ * the existing GAME_START / streaming flow runs). */
+#define UNET_MSG_MAP_LIST_BEGIN    0xBB  /* [count:1] */
+#define UNET_MSG_MAP_LIST_ITEM     0xBC  /* [idx:1][source:1][stage_id:1]
+                                          *  [slug_lp][name_lp][author_lp]
+                                          *  [size:2 BE]
+                                          * source: 0=baked-CD-stage, 1=streamed-custom
+                                          * stage_id: 0..3 if baked, 0xFF if custom
+                                          * slug/name/author: u8 length-prefixed UTF-8
+                                          *   (slug truncated 16, name 24, author 16) */
+#define UNET_MSG_MAP_PICK_TALLY    0xBD  /* [count:1] [{idx:1, votes:1}*count] */
+#define UNET_MSG_MAP_PICK_RESULT   0xBE  /* [winning_idx:1] - server committed pick, GAME_START follows */
+#define UNET_MAP_LIST_MAX_ITEMS     64   /* upper bound per match (4 baked + up to 60 custom) */
+#define UNET_MAP_SLUG_MAX           16
+#define UNET_MAP_NAME_MAX           24
+#define UNET_MAP_AUTHOR_MAX         16
 #define UNET_MAP_CHUNK_DATA_MAX    120   /* fits in TX 128-byte frame after opcode+idx+len header */
 #define UNET_MAP_MAX_SIZE        16384   /* generous ceiling above 11 KB .UTE — guards alloc */
 #define UNET_MAP_MAX_CHUNKS         255  /* num_chunks is u8; 255 × 120 = 30,600 bytes */

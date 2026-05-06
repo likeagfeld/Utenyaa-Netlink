@@ -10,6 +10,7 @@
 #include "utenyaa_net.h"
 #include "utenyaa_protocol.h"
 #include "utenyaa_map_stream.h"
+#include "../map_pick.h"
 #include "net_transport.h"
 
 #include <stdint.h>
@@ -587,6 +588,10 @@ static void dispatch(const uint8_t* p, int len)
     case UNET_MSG_MAP_BEGIN:         unet_map_stream_on_begin(p, len); break;
     case UNET_MSG_MAP_CHUNK:         unet_map_stream_on_chunk(p, len); break;
     case UNET_MSG_MAP_END:           unet_map_stream_on_end(); break;
+    case UNET_MSG_MAP_LIST_BEGIN:    unet_map_pick_on_list_begin(p, len); break;
+    case UNET_MSG_MAP_LIST_ITEM:     unet_map_pick_on_list_item(p, len); break;
+    case UNET_MSG_MAP_PICK_TALLY:    unet_map_pick_on_tally(p, len); break;
+    case UNET_MSG_MAP_PICK_RESULT:   unet_map_pick_on_result(p, len); break;
     case UNET_MSG_PLAYER_JOIN:       /* handled via LOBBY_STATE */ break;
     case UNET_MSG_PLAYER_LEAVE:      /* handled via LOBBY_STATE */ break;
     case UNET_MSG_PAUSE_ACK:         /* UI-only */ break;
@@ -703,6 +708,13 @@ void unet_send_stage_vote(uint8_t stage_id)
     g_net.tx_buf[3] = stage_id;
     tx(g_net.tx_buf, n);
     g_net.my_stage_vote = stage_id;
+}
+
+void unet_send_map_pick_vote(uint8_t idx)
+{
+    int n = simple_frame(g_net.tx_buf, UNET_MSG_MAP_PICK_VOTE, 1);
+    g_net.tx_buf[3] = idx;
+    tx(g_net.tx_buf, n);
 }
 
 void unet_send_bot_add(void)

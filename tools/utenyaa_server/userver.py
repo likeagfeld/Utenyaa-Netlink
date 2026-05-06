@@ -460,6 +460,68 @@ def build_map_end() -> bytes:
     return encode_frame(bytes([UNET_MAP_END]))
 
 
+# ----------------------------------------------------------------------
+# In-lobby map picker — server-driven scrollable list. Sent to all
+# in-game clients when the first START_GAME_REQ of a round arrives;
+# clients transition to UGAME_STATE_MAP_PICK, vote, and the second
+# START_GAME_REQ commits the highest-vote map.
+# ----------------------------------------------------------------------
+
+UNET_MAP_LIST_MAX_ITEMS = 64
+UNET_MAP_SLUG_MAX       = 16
+UNET_MAP_NAME_MAX       = 24
+UNET_MAP_AUTHOR_MAX     = 16
+
+
+def _enc_lp_string(s: str, max_len: int) -> bytes:
+    """Length-prefixed UTF-8 string, truncated to max_len bytes.
+    Mirror of Saturn-side s_read_lp_string in map_pick.c."""
+    raw = (s or "").encode("utf-8", "replace")[:max_len]
+    return bytes([len(raw)]) + raw
+
+
+def build_map_list_begin(count: int) -> bytes:
+    return encode_frame(bytes([UNET_MAP_LIST_BEGIN, count & 0xFF]))
+
+
+def build_map_list_item(idx: int, source: int, stage_id: int,
+                        slug: str, name: str, author: str,
+                        size_bytes: int) -> bytes:
+    payload = bytes([
+        UNET_MAP_LIST_ITEM,
+        idx & 0xFF,
+        source & 0xFF,
+        stage_id & 0xFF,
+    ])
+    payload += _enc_lp_string(slug,   UNET_MAP_SLUG_MAX)
+    payload += _enc_lp_string(name,   UNET_MAP_NAME_MAX)
+    payload += _enc_lp_string(author, UNET_MAP_AUTHOR_MAX)
+    payload += struct.pack("!H", size_bytes & 0xFFFF)
+    return encode_frame(payload)
+
+
+def build_map_pick_tally(tally: dict[int, int]) -> bytes:
+    """tally: {idx: votes}. Encodes as count + (idx, votes) pairs."""
+    items = [(idx & 0xFF, min(255, max(0, v)))
+             for idx, v in tally.items() if v > 0]
+    payload = bytes([UNET_MAP_PICK_TALLY, len(items) & 0xFF])
+    for idx, v in items:
+        payload += bytes([idx, v])
+    return encode_frame(payload)
+
+
+def build_map_pick_result(idx: int) -> bytes:
+    return encode_frame(bytes([UNET_MAP_PICK_RESULT, idx & 0xFF]))
+
+
+# Server-side opcode constants for the new map-pick traffic.
+UNET_MAP_LIST_BEGIN  = 0xBB
+UNET_MAP_LIST_ITEM   = 0xBC
+UNET_MAP_PICK_TALLY  = 0xBD
+UNET_MAP_PICK_RESULT = 0xBE
+UNET_MAP_PICK_VOTE   = 0x26
+
+
 def build_pause_ack(paused: bool) -> bytes:
     return encode_frame(bytes([UNET_PAUSE_ACK, 1 if paused else 0]))
 
@@ -899,6 +961,13 @@ class UtenyaaServer:
         for i in range(num_bots):
             self.bots.append(BotPlayer(BOT_NAMES[i % len(BOT_NAMES)], i))
 
+        # Map-pick phase state. Populated when the first START_GAME_REQ
+        # of a round arrives; cleared once the picker commits to a
+        # winner and the regular match-start flow runs.
+        self.map_picking: bool = False
+        self.map_pick_list: list[dict] = []
+        self.map_pick_votes: dict[int, int] = {}   # user_id → idx
+
         # Leaderboard
         self.leaderboard: dict[str, dict] = {}
         self._lb_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -1231,10 +1300,150 @@ class UtenyaaServer:
         winners = [i for i in enabled if tally[i] == max_votes]
         return random.choice(winners)
 
+    def _on_map_pick_vote(self, c: ClientInfo, idx: int):
+        """Player picked a map in the in-lobby selector. Record their
+        vote and re-broadcast the tally so peers see it live."""
+        if not self.map_picking:
+            return
+        if idx >= len(self.map_pick_list):
+            return
+        # `c.user_id` may be the negative pre-auth key; only authenticated
+        # clients reach this path so we always have a positive id.
+        self.map_pick_votes[c.user_id] = idx
+        self._broadcast_map_pick_tally()
+
+    def _broadcast_map_pick_tally(self):
+        tally: dict[int, int] = {}
+        for idx in self.map_pick_votes.values():
+            tally[idx] = tally.get(idx, 0) + 1
+        self._broadcast(build_map_pick_tally(tally))
+
+    def _build_map_pick_list(self) -> list[dict]:
+        """Combined list shown to clients:
+            [0..3] = the four baked-in CD stages, source=0
+            [4..]  = every .UTE in the editor's maps dir, source=1
+        Author/name pulled from the JSON sidecar when available; falls
+        back to the slug if the sidecar is missing or malformed."""
+        out = []
+        # 4 baked stages
+        for stage_id, name in enumerate(STAGE_NAMES):
+            out.append({
+                "idx": len(out),
+                "source": 0,
+                "stage_id": stage_id,
+                "slug": name.lower(),
+                "name": name,
+                "author": "ReyeMe / DannyDuarte",
+                "size_bytes": 0,
+            })
+        # Custom maps from disk
+        try:
+            entries = sorted(os.listdir(self.editor_maps_dir))
+        except OSError:
+            entries = []
+        for fname in entries:
+            if not fname.lower().endswith(".ute"):
+                continue
+            slug = fname[:-4].lower()
+            full = os.path.join(self.editor_maps_dir, fname)
+            try:
+                size = os.path.getsize(full)
+            except OSError:
+                continue
+            display_name = slug
+            display_author = ""
+            sidecar = os.path.join(self.editor_maps_dir, slug + ".json")
+            if os.path.isfile(sidecar):
+                try:
+                    j = json.loads(open(sidecar, "r").read())
+                    display_name   = (j.get("name")   or display_name)[:UNET_MAP_NAME_MAX]
+                    display_author = (j.get("author") or "")[:UNET_MAP_AUTHOR_MAX]
+                except Exception:
+                    pass
+            out.append({
+                "idx": len(out),
+                "source": 1,
+                "stage_id": 0xFF,
+                "slug": slug,
+                "name": display_name,
+                "author": display_author,
+                "size_bytes": size,
+            })
+            if len(out) >= UNET_MAP_LIST_MAX_ITEMS:
+                break
+        return out
+
+    def _enter_map_pick_phase(self):
+        """First START_GAME_REQ of a round → broadcast list, transition
+        all in-game clients to MAP_PICK. The C++ Saturn glue watches
+        for MAP_LIST_BEGIN to flip its game state."""
+        self.map_pick_list = self._build_map_pick_list()
+        self.map_pick_votes = {}
+        self.map_picking = True
+        log.info("MAP_PICK phase entered: %d maps in pool",
+                 len(self.map_pick_list))
+        self._broadcast(build_map_list_begin(len(self.map_pick_list)))
+        for m in self.map_pick_list:
+            self._broadcast(build_map_list_item(
+                m["idx"], m["source"], m["stage_id"],
+                m["slug"], m["name"], m["author"], m["size_bytes"]))
+        # Initial empty tally so the picker UI shows v=0 instead of stale.
+        self._broadcast_map_pick_tally()
+
+    def _commit_map_pick(self) -> tuple[str, int]:
+        """Resolve the vote tally to a winning map. Returns
+        (slug, idx). Highest votes wins; random tiebreak; if no
+        votes at all, pick a random map from the pool."""
+        if not self.map_pick_list:
+            return ("", 0)
+        tally: dict[int, int] = {}
+        for idx in self.map_pick_votes.values():
+            tally[idx] = tally.get(idx, 0) + 1
+        if tally:
+            top = max(tally.values())
+            winners = [i for i, v in tally.items() if v == top]
+            chosen = random.choice(winners)
+        else:
+            chosen = random.randrange(len(self.map_pick_list))
+        m = self.map_pick_list[chosen]
+        return (m["slug"], chosen)
+
     def _on_start_game_req(self, c: ClientInfo):
         if self.match is not None:
             log.info("START_GAME_REQ from %s rejected: match already active", c.username)
             return
+
+        # Two-phase START flow:
+        #   Phase 1: not yet picking — broadcast map list, transition
+        #            clients to MAP_PICK, await votes.
+        #   Phase 2: already picking — commit the highest-vote map and
+        #            run the regular match-start (with streaming if the
+        #            chosen map is a custom one).
+        if not self.map_picking:
+            # Same readiness check the existing flow used to gate START.
+            all_ready = sorted(
+                [cc for cc in self.clients.values()
+                 if cc.authenticated and cc.ready],
+                key=lambda cc: cc.ready_at)
+            slots_used = len(self.bots)
+            ready_humans = []
+            for cc in all_ready:
+                need = 1 + len(cc.local_names)
+                if slots_used + need > MAX_PLAYERS: continue
+                ready_humans.append(cc)
+                slots_used += need
+            if slots_used < MIN_TO_START:
+                c.send_raw(build_log(f"Need {MIN_TO_START} players to start"))
+                log.info("START_GAME_REQ rejected: insufficient slots")
+                return
+            self._enter_map_pick_phase()
+            return
+        # Phase 2 — commit the pick. The chosen slug feeds into the
+        # existing match-start flow below; if it names a custom map we
+        # set use_live_map=true + live_map_slug for this match only,
+        # so _load_live_map_bytes finds it. The original tune values
+        # are restored after match start so the operator's pinned map
+        # (if any) isn't permanently overwritten.
 
         # ALL ready humans, sorted by the timestamp they toggled ready
         # (oldest first). When the lobby holds more than MAX_PLAYERS
@@ -1272,20 +1481,54 @@ class UtenyaaServer:
             log.info("START_GAME_REQ rejected: insufficient slots")
             return
 
-        # Live custom-map override: when admin has pinned a map via the
-        # editor + Map Editor tab, ALL matches run on that streamed map
-        # until the override is cleared. Stage Pool checkboxes are
-        # bypassed; clients receive the .UTE bytes via MAP_BEGIN/CHUNK/
-        # END before GAME_START with stage_id = UNET_STAGE_STREAMED.
-        # If the live map fails to load (slug typo, file removed), we
-        # fall back to the regular Stage Pool — never block start.
+        # MAP_PICK has resolved a winner. Translate that pick into the
+        # existing live-map / stage-pool inputs so the rest of the
+        # match-start flow (including streaming) doesn't need to know
+        # the picker happened.
+        pick_slug, pick_idx = self._commit_map_pick()
+        picked = self.map_pick_list[pick_idx] if 0 <= pick_idx < len(self.map_pick_list) else None
+        # Tell clients which row won (UI flash). Do this BEFORE the
+        # ~7-8 s streaming window so the picker's "MAP COMMITTED"
+        # banner is visible during the wait.
+        if picked is not None:
+            self._broadcast(build_map_pick_result(pick_idx))
+        # End the picker phase regardless of pick outcome.
+        self.map_picking = False
+        self.map_pick_votes = {}
+
+        # Saved tune state — restored after match start so the
+        # operator's pinned map (if any) is preserved across matches
+        # that picked something else.
+        saved_use_live = self.tune.get("use_live_map", False)
+        saved_live_slug = self.tune.get("live_map_slug", "")
+        if picked is not None and picked["source"] == 1:
+            # Custom map win — feed the slug into the streaming path.
+            self.tune["use_live_map"]  = True
+            self.tune["live_map_slug"] = picked["slug"]
+        elif picked is not None and picked["source"] == 0:
+            # Baked-stage win — make sure no streaming kicks in even if
+            # a custom slug was previously pinned.
+            self.tune["use_live_map"]  = False
+        # ELSE: shouldn't happen — fall through to legacy logic.
+
         live_bytes = self._load_live_map_bytes() if self.tune.get("use_live_map") else None
         if live_bytes is not None:
             stage = UNET_STAGE_STREAMED
             log.info("Match using LIVE MAP slug=%r size=%d bytes",
                      self.tune.get("live_map_slug", ""), len(live_bytes))
+        elif picked is not None and picked["source"] == 0:
+            # Force the picker's chosen baked stage even if Stage Pool
+            # has it disabled — explicit player vote overrides the
+            # pool mask. (Would-be desync if we returned a different
+            # stage from _pick_stage now.)
+            stage = picked["stage_id"]
         else:
             stage = self._pick_stage()
+        # Restore the persistent tune values (the per-match override
+        # above is consumed; future matches go back to whatever the
+        # admin had pinned).
+        self.tune["use_live_map"]  = saved_use_live
+        self.tune["live_map_slug"] = saved_live_slug
         seed = random.randint(1, 0xFFFFFFFF)
         # MatchState wants a 0-3 stage id for crate roster lookup. For the
         # streamed override we use the slug's source stage if known via
@@ -1433,6 +1676,12 @@ class UtenyaaServer:
         self.game_players.clear()
         self._last_sync_state.clear()
         self.match = None
+        # Reset map-pick state so the next round's first START_GAME_REQ
+        # re-enters the picker (otherwise we'd skip straight to "Phase 2
+        # commit" with a stale list and zero votes).
+        self.map_picking = False
+        self.map_pick_votes = {}
+        self.map_pick_list = []
         self._broadcast_lobby()
 
     def _lag_comp_bullet_check(self, shooter_pid: int,
@@ -1854,6 +2103,8 @@ class UtenyaaServer:
             self._on_character_select(c, payload[1])
         elif op == UNET_STAGE_VOTE and len(payload) >= 2:
             self._on_stage_vote(c, payload[1])
+        elif op == UNET_MAP_PICK_VOTE and len(payload) >= 2:
+            self._on_map_pick_vote(c, payload[1])
         elif op == UNET_BOT_ADD:
             self._on_bot_add()
         elif op == UNET_BOT_REMOVE:

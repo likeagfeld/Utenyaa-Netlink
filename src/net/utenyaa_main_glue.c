@@ -16,6 +16,7 @@
 #include "../connecting.h"
 #include "../name_entry.h"
 #include "../lobby.h"
+#include "../map_pick.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -161,6 +162,7 @@ bool unet_glue_is_online_screen_active(void)
     case UGAME_STATE_NAME_ENTRY:
     case UGAME_STATE_CONNECTING:
     case UGAME_STATE_LOBBY:
+    case UGAME_STATE_MAP_PICK:
         return true;
     default:
         return false;
@@ -244,6 +246,10 @@ void unet_glue_tick_frame(void)
         lobby_input();
         lobby_update();
         lobby_draw();
+        break;
+    case UGAME_STATE_MAP_PICK:
+        map_pick_input();
+        map_pick_draw();
         break;
     default:
         break;

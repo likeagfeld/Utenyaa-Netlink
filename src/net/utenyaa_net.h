@@ -313,6 +313,7 @@ void unet_send_start_game(void);
 void unet_send_character_select(uint8_t char_id);
 void unet_send_character_select_p2(uint8_t char_id);
 void unet_send_stage_vote(uint8_t stage_id);
+void unet_send_map_pick_vote(uint8_t idx);
 void unet_send_bot_add(void);
 void unet_send_bot_remove(void);
 void unet_send_stage_loaded_ack(void);
