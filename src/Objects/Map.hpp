@@ -1,6 +1,7 @@
 #pragma once
 
 #include <jo/Jo.hpp>
+#include <stdio.h>           /* snprintf for tile-rotation diagnostics */
 #include "Mesh3D.hpp"
 #include "../Utils/LoaderUtil.hpp"
 #include "../Utils/std/vector.h"
@@ -26,9 +27,18 @@ namespace Objects
 		 */
 		static const int GouraudTableStart = JO_VDP1_VRAM + 0x70000;
 
-		/** @brief Level tile
+		/** @brief Level tile — MUST be exactly 4 bytes to match the
+		 *  .UTE on-disk layout. The packed attribute disables
+		 *  alignment padding; without it some GCC configurations
+		 *  back the bitfield with a 32-bit storage unit, making
+		 *  sizeof(Tile) = 8 and offsetting every tile beyond the
+		 *  first to a wrong .UTE byte. The explicit-byte rotation
+		 *  + depth reads elsewhere in this file ALSO defend against
+		 *  bitfield endianness mismatches (operator-reported
+		 *  "rotations not taking effect on Saturn" was caused by
+		 *  one or both of these issues).
 		 */
-		struct Tile
+		struct __attribute__((packed)) Tile
 		{
 			/** @brief Depth and rotation are present in a single byte
 			 */
@@ -323,6 +333,28 @@ namespace Objects
 		// Initialize mesh
 		this->mapMesh = Mesh3D((Map::MapDimensionSize + 1) * (Map::MapDimensionSize + 1), Map::MapDimensionSize * Map::MapDimensionSize);
 		unet_send_dbg_log("CKPT-M3 Map mesh-init");
+
+		/* One-shot diagnostic: log the raw byte + decoded rotation +
+		 * decoded depth for two representative tiles so the operator
+		 * can confirm the .UTE actually contains the rotation values
+		 * they set in the editor. ALSO log sizeof(Tile) — if GCC has
+		 * laid the struct out wider than 4 bytes due to bitfield
+		 * int-storage, every tile beyond the first reads from a wrong
+		 * offset and rotation would always look like 0 (or whatever
+		 * happens to be at the misaligned address). */
+		{
+			const uint8_t* tb_a = reinterpret_cast<const uint8_t*>(&level->TileData[0]);
+			const uint8_t* tb_b = reinterpret_cast<const uint8_t*>(&level->TileData[5]);
+			const int stride = (int)(reinterpret_cast<const uint8_t*>(&level->TileData[1])
+			                       - reinterpret_cast<const uint8_t*>(&level->TileData[0]));
+			char buf[64];
+			snprintf(buf, sizeof(buf),
+			         "TILE_DBG sz=%d t0=%02x r%d d%d t5=%02x r%d d%d",
+			         stride,
+			         tb_a[0], (tb_a[0] >> 6) & 3, tb_a[0] & 0x0F,
+			         tb_b[0], (tb_b[0] >> 6) & 3, tb_b[0] & 0x0F);
+			unet_send_dbg_log(buf);
+		}
 
 		this->Light.Direction = level->Sun.Direction;
 		this->Light.Color = level->Sun.Color;

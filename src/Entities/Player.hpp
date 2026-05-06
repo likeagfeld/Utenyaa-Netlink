@@ -119,21 +119,30 @@ namespace Entities
 				((uint8_t)this->controller == g_Game.myPlayerID) ||
 				(g_Game.hasSecondLocal && (uint8_t)this->controller == g_Game.myPlayerID2);
 
-			// Fire logic with pending-fire latch (see pendingFire docs
-			// above). Two-step:
-			//   1. ANY rising edge of A (jo_is_input_key_down via
-			//      IsControllerButtonDown) latches pendingFire = true.
-			//      Edges arriving DURING cooldown are not lost — they
-			//      sit in the latch waiting for cooldown to clear.
-			//   2. When cooldown reaches 0 AND pendingFire is set,
-			//      fire the bullet and clear the latch.
-			// Net effect for the operator: every A press produces a
-			// shot — never silently swallowed. Cooldown 0x1b (27
-			// frames ≈ 0.45 s) preserved verbatim from upstream so
-			// rapid-fire feel is unchanged; the latch only fixes the
-			// "press during cooldown does nothing" miss.
-			if (isLocalCtrl &&
-				Helpers::IsControllerButtonDown(this->controller, JO_KEY_A))
+			// Fire logic with pending-fire latch + held-state backstop.
+			// Operator: "shooting still is non-responsive on A button
+			// presses occasionally" — even after the pending-latch fix.
+			// Three failure modes pendingFire alone doesn't catch:
+			//   (a) SMPC peripheral poll missed the rising edge entirely
+			//       (controller bounce, fast tap < 1 frame, peripheral
+			//        timing skew) — no edge ever fires, so the latch
+			//        never engages.
+			//   (b) Operator holds A expecting auto-repeat fire — edge-
+			//       only never fires after the first shot until they
+			//       release+repress.
+			//   (c) Long press across cooldown — same as (b).
+			// Fix: latch on EITHER edge OR currently-held. Held-state
+			// alone gives effective auto-fire at cooldown rate (1 shot
+			// per 0x1b = 27 frames ≈ 0.45 s); edge captures fast taps
+			// that would miss the held-frame check. Combined, every
+			// press path produces a shot. Cooldown 0x1b preserved
+			// verbatim — feel of one shot per ~0.45s when held is
+			// unchanged from edge-with-cooldown rate.
+			const bool aEdge =
+				Helpers::IsControllerButtonDown(this->controller, JO_KEY_A);
+			const bool aHeld =
+				Helpers::IsControllerButtonPressed(this->controller, JO_KEY_A);
+			if (isLocalCtrl && (aEdge || aHeld))
 			{
 				this->pendingFire = true;
 			}
