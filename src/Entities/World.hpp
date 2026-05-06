@@ -43,7 +43,7 @@ namespace Entities
 		 */
 		Objects::Map* Map;
 
-		/** @brief Initializes a new instance of the World and populates it with entities
+		/** @brief Initializes a new instance of the World from a CD .UTE.
 		 * @param name Name of the map file on the CD
 		 */
 		World(const char* name)
@@ -62,6 +62,31 @@ namespace Entities
 			// Load map file
 			this->Map = new Objects::Map(name, Objects::Terrain::FirstGroundTextureIndex);
 			unet_send_dbg_log("CKPT-W2 World post-Map");
+			this->FinishConstruction();
+		}
+
+		/** @brief Initializes a new instance of the World from a streamed
+		 *  buffer (received via NetLink). Buffer is jo_malloc-allocated;
+		 *  Map ctor consumes it. */
+		World(uint8_t* preloadBuf, int preloadLen)
+		{
+			unet_send_dbg_log("CKPT-W1S World streamed pre-Map");
+			/* Same CD-stop as the file-mode ctor: even though we're not
+			 * doing a CD data read, the gameplay-track audio Play() that
+			 * runs after World ctor returns expects the lens free. */
+			PoneSound::CD::Stop();
+			this->Map = new Objects::Map(preloadBuf, preloadLen,
+			                              Objects::Terrain::FirstGroundTextureIndex);
+			unet_send_dbg_log("CKPT-W2 World streamed post-Map");
+			this->FinishConstruction();
+		}
+
+	private:
+		/* Shared post-Map-ctor steps (terrain bind, entity spawn). Both
+		 * World ctors call this; difference is only how the Map was
+		 * loaded (CD vs streamed). */
+		void FinishConstruction()
+		{
 			if (!this->Map || this->Map->EntityDefinitionsCount == 0)
 			{
 				/* Map allocation failed OR file read returned empty/garbage.
@@ -127,6 +152,7 @@ namespace Entities
 			jo_clear_screen();
 		}
 
+	public:
 		/** @brief Destroy the World object
 		 */
 		~World()

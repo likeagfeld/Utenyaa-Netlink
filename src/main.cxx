@@ -14,6 +14,8 @@
 
 #include "net/utenyaa_main_glue.h"
 #include "net/utenyaa_net.h"
+#include "net/utenyaa_map_stream.h"
+#include "net/utenyaa_protocol.h"   /* UNET_STAGE_STREAMED */
 #include "utenyaa_online_bridge.hpp"
 #include "Entities/Player.hpp"
 
@@ -255,7 +257,45 @@ int main()
 				unet_send_dbg_log("CKPT-C pre-World-ctor");
 				Settings::GameEnded = false;
 				startTime = Fxp::FromInt(Settings::TotalSeconds);
-				worldPtr = new Entities::World(Settings::StageFiles[Settings::SelectedStage]);
+				/* If the server flagged this match as STREAMED (stage 0xFE)
+				 * AND a complete validated map buffer was received before
+				 * GAME_START, load the World from the streamed buffer.
+				 * Otherwise fall through to the CD path (the four baked
+				 * stages indexed 0..3). The streamed-buffer take transfers
+				 * ownership; Map ctor jo_free()s after parse. */
+				if ((uint8_t)Settings::SelectedStage == UNET_STAGE_STREAMED &&
+				    unet_map_stream_is_ready())
+				{
+					int sz = 0;
+					uint8_t* buf = unet_map_stream_take_buffer(&sz);
+					if (buf)
+					{
+						unet_send_dbg_log("CKPT-C-S using streamed map");
+						worldPtr = new Entities::World(buf, sz);
+					}
+					else
+					{
+						/* Should not happen: is_ready true but take returned
+						 * NULL. Fall back to stage 0 so we don't black-screen. */
+						unet_send_dbg_log("CKPT-CX streamed take NULL fallback ISLAND");
+						worldPtr = new Entities::World(Settings::StageFiles[0]);
+					}
+				}
+				else
+				{
+					if ((uint8_t)Settings::SelectedStage == UNET_STAGE_STREAMED)
+					{
+						/* Server promised streamed but RX state isn't ready —
+						 * either CRC failed or chunks didn't all arrive. Fall
+						 * back to ISLAND rather than dereferencing a null
+						 * StageFiles[0xFE] index. The dbg-log makes the
+						 * fallback visible in server journal so the operator
+						 * knows to retry. */
+						unet_send_dbg_log("CKPT-CX streamed not-ready fallback ISLAND");
+						Settings::SelectedStage = 0;
+					}
+					worldPtr = new Entities::World(Settings::StageFiles[Settings::SelectedStage]);
+				}
 				unet_send_dbg_log("CKPT-D post-World-ctor");
 				PoneSound::CD::Play(3, 3, true);
 				unet_send_dbg_log("CKPT-E post-CD-Play (gameplay live)");

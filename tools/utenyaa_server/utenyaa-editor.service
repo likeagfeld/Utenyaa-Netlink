@@ -1,0 +1,19 @@
+[Unit]
+Description=Utenyaa Web Map Editor
+After=network.target
+
+[Service]
+Type=simple
+User=gary
+WorkingDirectory=/opt/utenyaa-editor
+Environment=UTENYAA_EDITOR_HOST=127.0.0.1
+Environment=UTENYAA_EDITOR_PORT=9095
+Environment=UTENYAA_MAPS_DIR=/opt/utenyaa-editor/webapp/maps
+Environment=UTENYAA_TERRAIN_PAK=/opt/utenyaa-editor/reference_pak/TERRAIN.PAK
+Environment=UTENYAA_MODELS_DIR=/opt/utenyaa-editor/reference_models
+ExecStart=/usr/bin/python3 /opt/utenyaa-editor/webapp/app.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

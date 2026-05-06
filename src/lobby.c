@@ -24,6 +24,7 @@
 #include "font.h"
 #include "net/utenyaa_game.h"
 #include "net/utenyaa_net.h"
+#include "net/utenyaa_map_stream.h"   /* streamed-map progress overlay */
 #include "net/saturn_uart16550.h"
 #include "net/modem.h"
 
@@ -456,5 +457,29 @@ void lobby_draw(void)
      * B now leaves lobby immediately (see lobby_input). */
 
 skip_player_list:
+
+    /* Streamed-map progress overlay. When the server is mid-stream
+     * (g_map_stream.active = true between MAP_BEGIN and MAP_END), the
+     * client is still in lobby state — overlay a single-line progress
+     * bar at the bottom of the screen so the operator/players know
+     * the wait is intentional. The full transfer is ~7-8s @ 14.4k for
+     * an 11 KB .UTE; a frozen-looking lobby would be confusing.
+     * Once g_map_stream.ready flips true, the next GAME_START will
+     * transition to gameplay and the World ctor consumes the buffer. */
+    if (g_map_stream.active && g_map_stream.total_size > 0) {
+        int pct = (int)((long long)g_map_stream.received_bytes * 100
+                        / (long long)g_map_stream.total_size);
+        if (pct < 0)   pct = 0;
+        if (pct > 100) pct = 100;
+        font_printf(FONT_X(1), FONT_Y(27), 540,
+                    "STREAMING MAP... %3d%% (%d/%d B)",
+                    pct,
+                    g_map_stream.received_bytes,
+                    g_map_stream.total_size);
+    } else if (g_map_stream.ready) {
+        /* Ready — buffered, validated, awaiting GAME_START. */
+        font_draw("MAP LOADED — WAITING FOR MATCH START",
+                  FONT_X(1), FONT_Y(27), 540);
+    }
     ;
 }

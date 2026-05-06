@@ -127,6 +127,21 @@ static inline int16_t unet_d_angle(uint8_t q) { return (int16_t)(((uint16_t)q) <
 #define UNET_MSG_CHARACTER_TAKEN   0xB6  /* [char_id:1] - reject, try another */
 #define UNET_MSG_STAGE_VOTE_TALLY  0xB7  /* [{stage:1,votes:1}×4] live vote display */
 
+/* Streamed .UTE map transfer (server pushes a custom-authored map's
+ * bytes to all clients before GAME_START). Used when the operator has
+ * pinned a "live map" via the admin portal — the server flags the next
+ * match's stage_id as UNET_STAGE_STREAMED (0xFE) and emits the map
+ * bytes via the three opcodes below in order: BEGIN, then num_chunks
+ * of CHUNK, then END. Saturn buffers via jo_malloc; on END+CRC-match
+ * the World ctor parses the buffer in-place (skipping the CD read). */
+#define UNET_MSG_MAP_BEGIN         0xB8  /* [total_size:2 BE][num_chunks:1][crc16:2 BE] */
+#define UNET_MSG_MAP_CHUNK         0xB9  /* [chunk_idx:1][len:1][data:N] */
+#define UNET_MSG_MAP_END           0xBA  /* No payload */
+#define UNET_MAP_CHUNK_DATA_MAX    120   /* fits in TX 128-byte frame after opcode+idx+len header */
+#define UNET_MAP_MAX_SIZE        16384   /* generous ceiling above 11 KB .UTE — guards alloc */
+#define UNET_MAP_MAX_CHUNKS         255  /* num_chunks is u8; 255 × 120 = 30,600 bytes */
+#define UNET_STAGE_STREAMED        0xFE  /* sentinel stage_id meaning "use streamed buffer" */
+
 /*============================================================================
  * Input Bitmask (fits in 1 byte)
  * Utenyaa controls: D-pad moves tank, A=shoot, B=drop mine, C=throw bomb,

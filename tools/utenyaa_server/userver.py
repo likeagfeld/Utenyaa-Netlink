@@ -167,6 +167,19 @@ UNET_LEADERBOARD_DATA = 0xB4
 UNET_LOCAL_PLAYER_ACK = 0xB5
 UNET_CHARACTER_TAKEN = 0xB6
 UNET_STAGE_VOTE_TALLY = 0xB7
+UNET_MAP_BEGIN = 0xB8
+UNET_MAP_CHUNK = 0xB9
+UNET_MAP_END   = 0xBA
+
+# Sentinel stage_id meaning "this match uses a streamed custom map".
+# When the server sees use_live_map=True and live_map_slug names a
+# valid .UTE in the editor's maps dir, it sends MAP_BEGIN/CHUNK/END
+# before GAME_START with stage_id = UNET_STAGE_STREAMED. Saturn-side
+# the World ctor consumes the streamed buffer instead of reading CD.
+UNET_STAGE_STREAMED   = 0xFE
+UNET_MAP_CHUNK_DATA_MAX = 120     # fits in 128-byte TX frame after op+idx+len header
+UNET_MAP_MAX_SIZE       = 16384   # alloc guard, well above 11 KB .UTE
+UNET_MAP_MAX_CHUNKS     = 255     # u8 chunk index
 
 PICKUP_HEALTH = 0
 PICKUP_BOMB = 1
@@ -406,6 +419,45 @@ def build_player_leave(pid: int) -> bytes:
 def build_log(text: str) -> bytes:
     raw = text.encode("utf-8")[:255]
     return encode_frame(bytes([UNET_LOG, len(raw)]) + raw)
+
+
+# ----------------------------------------------------------------------
+# Streamed-map (.UTE byte transfer) builders. See UNET_MAP_BEGIN/CHUNK/END
+# in protocol.h on the Saturn side; mirror those exactly.
+# ----------------------------------------------------------------------
+
+def crc16_ccitt_false(data: bytes) -> int:
+    """CRC-16/CCITT-FALSE — poly 0x1021, init 0xFFFF, no reflection,
+    no xor-out. Identical to unet_map_stream_crc16() on the Saturn so
+    the END opcode's CRC validates client-side without library deps."""
+    crc = 0xFFFF
+    for b in data:
+        crc ^= b << 8
+        for _ in range(8):
+            if crc & 0x8000:
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+    return crc
+
+
+def build_map_begin(total_size: int, num_chunks: int, crc: int) -> bytes:
+    return encode_frame(bytes([UNET_MAP_BEGIN]) +
+                        struct.pack("!H", total_size & 0xFFFF) +
+                        bytes([num_chunks & 0xFF]) +
+                        struct.pack("!H", crc & 0xFFFF))
+
+
+def build_map_chunk(chunk_idx: int, chunk_data: bytes) -> bytes:
+    if len(chunk_data) > UNET_MAP_CHUNK_DATA_MAX:
+        raise ValueError(f"chunk too large: {len(chunk_data)} > {UNET_MAP_CHUNK_DATA_MAX}")
+    return encode_frame(bytes([UNET_MAP_CHUNK,
+                               chunk_idx & 0xFF,
+                               len(chunk_data) & 0xFF]) + chunk_data)
+
+
+def build_map_end() -> bytes:
+    return encode_frame(bytes([UNET_MAP_END]))
 
 
 def build_pause_ack(paused: bool) -> bytes:
@@ -799,7 +851,21 @@ class UtenyaaServer:
             "stage_enabled_cross":    False,
             "stage_enabled_valley":   True,
             "stage_enabled_railway":  True,
+            # Live custom map: when use_live_map=True and live_map_slug
+            # names a .UTE in the editor's maps dir, the next match
+            # streams that map to all clients (overriding the four
+            # baked-in stages — Stage Pool checkboxes ignored). Saturn
+            # side receives via MAP_BEGIN/CHUNK/END before GAME_START
+            # and parses the buffer instead of reading CD .UTE files.
+            "use_live_map":           False,
+            "live_map_slug":          "",
         }
+        # Where the editor stores its .UTE outputs. The editor service
+        # (utenyaa-editor.service) writes here; we read here. Override
+        # via env var if the editor is moved.
+        self.editor_maps_dir = os.environ.get(
+            "UTENYAA_EDITOR_MAPS_DIR",
+            "/opt/utenyaa-editor/webapp/maps")
 
         # Lobby players (keyed by game_pid 0..3, mapped from client user_id)
         self.game_players: dict[int, UtenyaaPlayer] = {}
@@ -1000,6 +1066,107 @@ class UtenyaaServer:
         c.stage_vote = stage_id
         self._broadcast_lobby()
 
+    # ------------------------------------------------------------------
+    # Streamed custom maps (Editor → Saturn)
+    # ------------------------------------------------------------------
+
+    def list_custom_maps(self) -> list[dict]:
+        """Enumerate .UTE files in the editor's maps dir. Returns a list
+        of {slug, size_bytes, mtime} sorted by slug. Used by the admin
+        portal to populate the live-map dropdown."""
+        out = []
+        try:
+            for name in sorted(os.listdir(self.editor_maps_dir)):
+                if not name.lower().endswith(".ute"):
+                    continue
+                full = os.path.join(self.editor_maps_dir, name)
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                slug = name[:-4]  # strip ".UTE" / ".ute"
+                # Editor saves slugs as lowercase but the .UTE file
+                # itself is uppercase by convention. Normalize the slug
+                # to lowercase so the round-trip with /api/tune is stable.
+                out.append({
+                    "slug": slug.lower(),
+                    "filename": name,
+                    "size_bytes": st.st_size,
+                    "mtime": int(st.st_mtime),
+                })
+        except (FileNotFoundError, NotADirectoryError, PermissionError) as e:
+            log.warning("list_custom_maps: cannot read %s: %s",
+                        self.editor_maps_dir, e)
+        return out
+
+    def _load_live_map_bytes(self) -> bytes | None:
+        """Read the .UTE bytes for the currently-pinned live map.
+        Returns None if the slug is empty, the file is missing, or
+        the file looks invalid (header check). Validates size against
+        UNET_MAP_MAX_SIZE so a corrupt huge file can't kill the
+        server's TX path."""
+        slug = (self.tune.get("live_map_slug") or "").strip().lower()
+        if not slug:
+            return None
+        # Defense-in-depth against path traversal — slugs are produced
+        # by the editor's slugify() (which the editor docs constrain
+        # to [a-z0-9_-]) but we don't want a malicious admin-portal
+        # request to bypass that.
+        if "/" in slug or "\\" in slug or ".." in slug:
+            log.warning("live map slug rejected (suspicious chars): %r", slug)
+            return None
+        # Try uppercase filename first (editor convention), then exact.
+        for fname in (slug.upper() + ".UTE", slug + ".UTE", slug + ".ute"):
+            full = os.path.join(self.editor_maps_dir, fname)
+            if os.path.isfile(full):
+                try:
+                    data = open(full, "rb").read()
+                except OSError as e:
+                    log.warning("live map %r read failed: %s", fname, e)
+                    return None
+                if len(data) < 4 or data[:3] != b"UTE":
+                    log.warning("live map %r: bad header (not 'UTE')", fname)
+                    return None
+                if len(data) > UNET_MAP_MAX_SIZE:
+                    log.warning("live map %r: %d bytes exceeds cap %d",
+                                fname, len(data), UNET_MAP_MAX_SIZE)
+                    return None
+                return data
+        log.info("live map slug %r: no file found in %s",
+                 slug, self.editor_maps_dir)
+        return None
+
+    def _stream_live_map_to_in_game_clients(self, data: bytes) -> None:
+        """Send MAP_BEGIN, MAP_CHUNK[*], MAP_END to every authenticated
+        in-game client. The chunks are pre-built once, then broadcast —
+        same byte-for-byte payload to all peers (no per-client state).
+        Saturn dispatcher consumes via unet_map_stream_on_*. CRC-16/
+        CCITT-FALSE matches the Saturn implementation."""
+        total = len(data)
+        crc = crc16_ccitt_false(data)
+        chunks = []
+        idx = 0
+        for off in range(0, total, UNET_MAP_CHUNK_DATA_MAX):
+            chunks.append(data[off:off + UNET_MAP_CHUNK_DATA_MAX])
+            idx += 1
+        if idx > UNET_MAP_MAX_CHUNKS:
+            log.error("live map needs %d chunks, max %d — refusing",
+                      idx, UNET_MAP_MAX_CHUNKS)
+            return
+
+        begin = build_map_begin(total, idx, crc)
+        end_frame = build_map_end()
+        chunk_frames = [build_map_chunk(i, c) for i, c in enumerate(chunks)]
+        log.info("Streaming live map: %d bytes in %d chunks crc=%04X",
+                 total, idx, crc)
+        for cc in self.clients.values():
+            if not cc.authenticated or not cc.in_game:
+                continue
+            cc.send_raw(begin)
+            for cf in chunk_frames:
+                cc.send_raw(cf)
+            cc.send_raw(end_frame)
+
     def _on_bot_add(self):
         if len(self.bots) + self._human_count() >= MAX_PLAYERS:
             return
@@ -1087,11 +1254,30 @@ class UtenyaaServer:
             log.info("START_GAME_REQ rejected: insufficient slots")
             return
 
-        stage = self._pick_stage()
+        # Live custom-map override: when admin has pinned a map via the
+        # editor + Map Editor tab, ALL matches run on that streamed map
+        # until the override is cleared. Stage Pool checkboxes are
+        # bypassed; clients receive the .UTE bytes via MAP_BEGIN/CHUNK/
+        # END before GAME_START with stage_id = UNET_STAGE_STREAMED.
+        # If the live map fails to load (slug typo, file removed), we
+        # fall back to the regular Stage Pool — never block start.
+        live_bytes = self._load_live_map_bytes() if self.tune.get("use_live_map") else None
+        if live_bytes is not None:
+            stage = UNET_STAGE_STREAMED
+            log.info("Match using LIVE MAP slug=%r size=%d bytes",
+                     self.tune.get("live_map_slug", ""), len(live_bytes))
+        else:
+            stage = self._pick_stage()
         seed = random.randint(1, 0xFFFFFFFF)
-        self.match = MatchState(stage, self.match_seconds, seed)
+        # MatchState wants a 0-3 stage id for crate roster lookup. For the
+        # streamed override we use the slug's source stage if known via
+        # the JSON sidecar later; for now reuse stage 0's crate layout
+        # so matches always have crates. (The streamed .UTE itself
+        # carries entity data inline — server crates are independent.)
+        ms_stage = stage if stage != UNET_STAGE_STREAMED else 0
+        self.match = MatchState(ms_stage, self.match_seconds, seed)
         self.match.crates = [Crate(x["slot"], x["flags"], x["x"], x["y"], x["z"])
-                             for x in build_crate_roster(stage)]
+                             for x in build_crate_roster(ms_stage)]
 
         # Assign game PIDs 0..N-1. Humans first, then bots.
         next_pid = 0
@@ -1138,13 +1324,39 @@ class UtenyaaServer:
         crate_roster = [{"slot": k.slot, "x": k.x, "y": k.y, "z": k.z, "flags": k.flags}
                         for k in self.match.crates]
 
+        # If live-map mode is on, push the .UTE bytes BEFORE GAME_START
+        # so each client's map_stream RX state is filled by the time
+        # GAME_START arrives. The Saturn-side dispatcher tolerates
+        # CHUNK arrival across many frames at the modem rate
+        # (UNET_RX_MAX_PER_POLL=192) — total wire time ~7-8s for 11 KB
+        # at 14.4k baud. Failure to load (slug missing) falls back
+        # silently to baked stages above.
+        if stage == UNET_STAGE_STREAMED and live_bytes is not None:
+            self._stream_live_map_to_in_game_clients(live_bytes)
+            # 500 ms safety pause AFTER queuing the stream and BEFORE
+            # GAME_START. TCP order guarantees END arrives before
+            # GAME_START on each client socket, but the Saturn drains
+            # only UNET_RX_MAX_PER_POLL=192 bytes per tick, so a
+            # GAME_START dispatched on the same tick as the first
+            # CHUNKs would be processed before the buffer is filled —
+            # main.cxx's `unet_map_stream_is_ready()` would be false
+            # → fallback to ISLAND. The pause lets the Saturn drain
+            # most of the in-flight stream before the GAME_START byte
+            # appears on the wire. (~7-8 s wire-time + 0.5 s = total
+            # transfer wall clock; well within UNET_AUTH_TIMEOUT.)
+            time.sleep(0.5)
+
         for cc in self.clients.values():
             if not cc.authenticated or not cc.in_game:
                 continue
             cc.send_raw(build_game_start(seed, cc.game_pid, stage, next_pid,
                                          self.match_seconds, crate_roster))
+        stage_label = (f"STREAMED({self.tune.get('live_map_slug','?')})"
+                       if stage == UNET_STAGE_STREAMED
+                       else STAGE_NAMES[stage] if 0 <= stage < len(STAGE_NAMES)
+                       else f"#{stage}")
         log.info("Match started: stage=%s seed=%08X players=%d",
-                 STAGE_NAMES[stage], seed, next_pid)
+                 stage_label, seed, next_pid)
 
     def _end_match(self, sudden: bool = False):
         if self.match is None:
@@ -2135,6 +2347,23 @@ class UtenyaaServer:
                     return
                 if path.startswith("/api/tune"):
                     body = json.dumps(server_ref.tune).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if path == "/api/list_custom_maps":
+                    # Editor → admin portal data link. Lists .UTE files
+                    # sitting in the editor's maps dir so the operator
+                    # can pick one to pin as the live map.
+                    payload = {
+                        "maps_dir": server_ref.editor_maps_dir,
+                        "live_map_slug": server_ref.tune.get("live_map_slug", ""),
+                        "use_live_map":  bool(server_ref.tune.get("use_live_map", False)),
+                        "maps": server_ref.list_custom_maps(),
+                    }
+                    body = json.dumps(payload).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))

@@ -230,12 +230,25 @@ namespace Objects
 			return x + (y * Map::MapDimensionSize);
 		}
 
+		/* file mode: load .UTE bytes from CD via jo_fs_read_file_in_dir.
+		 * preload mode: caller passes an already-loaded buffer (from
+		 * the streamed-map RX path); Map ctor parses in place and
+		 * jo_free()s it on completion (matches CD-mode lifecycle). */
 		Map(const char* file, int firstTerrainTexture);
+		Map(uint8_t* preloadBuf, int preloadLen, int firstTerrainTexture);
 
 		/** @brief Frees all resources and destroys the isntance
 		 */
 		~Map();
 
+	private:
+		/* Shared parse path used by both ctors. Takes ownership of the
+		 * buffer (caller transfers it). On exit the buffer is jo_free()d.
+		 * On parse failure (NULL stream), sets empty EntityDefinitions
+		 * so World ctor's defensive check can abort cleanly. */
+		void ParseLoadedStream(char* streamStart, int firstTerrainTexture);
+
+	public:
 		/** @brief Draw map
 		 */
 		void Draw();
@@ -264,7 +277,7 @@ namespace Objects
 		}
 	};
 
-	/** @brief Initializes a new instance of the Map class
+	/** @brief Initializes a new instance of the Map class from CD .UTE
 	 * @param file Map file name
 	 * @param firstTerrainTexture Index of first terrain texture
 	 */
@@ -274,13 +287,32 @@ namespace Objects
 		// Load level data
 		char* stream = jo_fs_read_file_in_dir(file, JO_ROOT_DIR, NULL);
 		unet_send_dbg_log("CKPT-M2 Map post-fs-read");
+		this->ParseLoadedStream(stream, firstTerrainTexture);
+	}
+
+	/** @brief Initializes a new instance of the Map class from a streamed
+	 *  buffer (received over NetLink via the MAP_BEGIN/CHUNK/END opcodes).
+	 *  The caller must have allocated `preloadBuf` via jo_malloc; this
+	 *  ctor takes ownership and jo_free()s it after parse completes.
+	 *  preloadLen is informational only (parse trusts the .UTE header).
+	 */
+	inline Map::Map(uint8_t* preloadBuf, int preloadLen, int firstTerrainTexture)
+	{
+		(void)preloadLen;
+		unet_send_dbg_log("CKPT-M1S Map streamed-ctor");
+		this->ParseLoadedStream(reinterpret_cast<char*>(preloadBuf), firstTerrainTexture);
+	}
+
+	inline void Map::ParseLoadedStream(char* stream, int firstTerrainTexture)
+	{
 		if (!stream)
 		{
 			/* CD read failed (worn lens, bad sector, emulator quirk, OOM in
-			 * the file-system bounce buffer). Caller's defensive check on
-			 * EntityDefinitionsCount will catch this and abort World ctor
-			 * cleanly instead of dereferencing into garbage. */
-			unet_send_dbg_log("CKPT-M2X Map fs-read NULL");
+			 * the file-system bounce buffer) OR streamed buffer was null.
+			 * Caller's defensive check on EntityDefinitionsCount will catch
+			 * this and abort World ctor cleanly instead of dereferencing
+			 * into garbage. */
+			unet_send_dbg_log("CKPT-M2X Map stream NULL");
 			this->EntityDefinitionsCount = 0;
 			this->EntityDefinitions = nullptr;
 			return;

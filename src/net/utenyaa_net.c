@@ -9,6 +9,7 @@
 
 #include "utenyaa_net.h"
 #include "utenyaa_protocol.h"
+#include "utenyaa_map_stream.h"
 #include "net_transport.h"
 
 #include <stdint.h>
@@ -583,6 +584,9 @@ static void dispatch(const uint8_t* p, int len)
     case UNET_MSG_LOCAL_PLAYER_ACK:  on_local_player_ack(p, len); break;
     case UNET_MSG_CHARACTER_TAKEN:   on_character_taken(p, len); break;
     case UNET_MSG_LOG:               on_log(p, len); break;
+    case UNET_MSG_MAP_BEGIN:         unet_map_stream_on_begin(p, len); break;
+    case UNET_MSG_MAP_CHUNK:         unet_map_stream_on_chunk(p, len); break;
+    case UNET_MSG_MAP_END:           unet_map_stream_on_end(); break;
     case UNET_MSG_PLAYER_JOIN:       /* handled via LOBBY_STATE */ break;
     case UNET_MSG_PLAYER_LEAVE:      /* handled via LOBBY_STATE */ break;
     case UNET_MSG_PAUSE_ACK:         /* UI-only */ break;
