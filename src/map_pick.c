@@ -326,11 +326,21 @@ void map_pick_input(void)
         unet_send_map_pick_vote(g_map_pick.cursor);
         s_my_vote = (int)g_map_pick.cursor;
     }
-    /* START commits — server picks the highest-vote map (random
-     * tiebreak) and broadcasts MAP_PICK_RESULT, then GAME_START.
+    /* START commits — auto-vote for the cursor's current row first
+     * so a player who scrolled to their preference and pressed
+     * START without explicitly tapping A still gets their pick
+     * counted. Without this auto-vote, _commit_map_pick on the
+     * server falls back to a random map when no one voted —
+     * observed as "the level I selected isn't the one that
+     * loaded" because the user assumed cursor-position was their
+     * vote (it wasn't, A is the vote button). TCP order on the
+     * single client socket guarantees the VOTE arrives before the
+     * START_GAME_REQ, so the server records it before commit.
      * Already-committed result blocks further START presses so a
      * spammed button can't trigger spurious match-starts. */
     if (start && !s_was_start && g_map_pick.result_idx == 0xFF) {
+        unet_send_map_pick_vote(g_map_pick.cursor);
+        s_my_vote = (int)g_map_pick.cursor;
         unet_send_start_game();
     }
 

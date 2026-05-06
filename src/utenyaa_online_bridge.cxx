@@ -149,8 +149,16 @@ static void cb_explosion(int32_t x, int32_t y, int32_t z, uint16_t /*radius*/,
                          const uint8_t* victims, int victim_count)
 {
     Vec3 pos = fxp_vec(x, y, z);
-    Fxp scale = Fxp::FromInt(1);
-    new Entities::Explosion(pos, scale);
+    /* Bomb explosions (server EXPLOSION broadcast on bomb-hit) get
+     * the same triple-sequential cluster as player deaths — operator
+     * directive: "when someone shoots a placed bomb on the field and
+     * it explodes it should do the same triple sequential big
+     * explosion animation". Single-frame Explosion at scale 1.0 was
+     * easy to miss in a busy match; BigExplosion gives a ~1 s
+     * fireball at three staggered positions for unmistakable
+     * destruction feedback. */
+    new Entities::BigExplosion(pos);
+    PoneSound::Sound::Play(1, PoneSound::PlayMode::Semi, 7);
 
     /* Apply server-resolved damage to named victims. Clamp to the static
      * buffer size (UNET_MAX_PLAYERS * 2) defensively — the net layer
@@ -223,6 +231,28 @@ static void cb_player_kill(uint8_t victim_id, uint8_t /*attacker_id*/)
      * did or didn't see. */
     Entities::Player* p = find_player_by_pid(victim_id);
     if (!p) return;
+
+    /* Local-player spurious-kill guard. The server may broadcast
+     * PLAYER_KILL for a stalled pid (its stall detector marks any
+     * pid that hasn't sent PLAYER_STATE within the grace window).
+     * If the stalled pid is OUR co-op P2 (or even our own P1) and
+     * the local sim still has them at full HP, the upstream
+     * cb_player_kill blindly applied the kill — observed as "P2
+     * shows charred at start of game". The local sim is the source
+     * of truth for our own players' liveness. Ignore server-driven
+     * kills for a still-alive local pid; the legit death path runs
+     * local-sim damage first → CLIENT_DEATH from us → server
+     * confirms with DAMAGE+KILL — by which point GetHealth() is 0
+     * here and the guard is a no-op. */
+    bool isLocal = ((uint8_t)victim_id == g_Game.myPlayerID) ||
+                   (g_Game.hasSecondLocal &&
+                    (uint8_t)victim_id == g_Game.myPlayerID2);
+    if (isLocal && p->GetHealth() > 0)
+    {
+        unet_send_dbg_log("CKPT-K spurious local kill ignored");
+        return;
+    }
+
     bool transition_to_dead = (p->GetHealth() > 0);
     if (transition_to_dead)
     {
@@ -230,44 +260,16 @@ static void cb_player_kill(uint8_t victim_id, uint8_t /*attacker_id*/)
         p->HandleMessages(Messages::Damage(curHp));
     }
 
-    /* Dramatic destruction visual — without this, the upstream death
-     * was just an instant body-tip + head-sprite swap, which:
-     *   (a) could be missed entirely in a busy 4-player match, and
-     *   (b) made spurious deaths from a network stall look identical
-     *       to a legitimate kill, leaving the operator unsure whether
-     *       a player they thought was alive had been ruled dead.
-     * Three staggered Explosion entities at slight world offsets give
-     * a fireball cluster — the existing 6-frame Explosion sprite
-     * (Explosion.hpp, FrameTime=0.1s × 6 frames = 0.6s total) cycles
-     * through cleanly, and offset positions add visual width so the
-     * effect reads as "tank obliterated" instead of "tiny puff".
-     * Scales 2.5/2.0/1.5 are 8-10× the bullet-impact explosion's
-     * default scale of 0.25 — far more visible at the player's
-     * camera distance.
-     *
-     * Only spawn on the alive→dead TRANSITION so a duplicate
-     * PLAYER_KILL from the server (e.g., from CLIENT_DEATH path
-     * AFTER lag-comp DAMAGE already killed them) doesn't double-
-     * spawn explosions. */
+    /* Dramatic destruction visual — three staggered explosions
+     * spawned by BigExplosion (~1.0s of fireball cluster) so a
+     * tank obliteration is unmistakable. Gated on the alive→dead
+     * transition so a duplicate PLAYER_KILL doesn't double-spawn. */
     if (transition_to_dead)
     {
         Vec3 pos = p->GetPosition();
-        Vec3 c1 = pos;
-        Vec3 c2 = Vec3(pos.x + Fxp::FromInt(3),
-                       pos.y + Fxp::FromInt(2),
-                       pos.z + Fxp::FromInt(2));
-        Vec3 c3 = Vec3(pos.x - Fxp::FromInt(2),
-                       pos.y - Fxp::FromInt(3),
-                       pos.z + Fxp::FromInt(4));
-        Fxp big = Fxp(2.5);
-        Fxp med = Fxp(1.5);
-        new Entities::Explosion(c1, big);
-        new Entities::Explosion(c2, med);
-        new Entities::Explosion(c3, big);
+        new Entities::BigExplosion(pos);
         /* Reuse channel 1 (bullet/fire SFX) at higher pitch for a
-         * heavier "boom" without needing new audio assets. PoneSound
-         * Semi mode lets the sound interrupt itself, so multi-kill
-         * rapid-fire deaths still produce one impact per kill. */
+         * heavier "boom" without needing new audio assets. */
         PoneSound::Sound::Play(1, PoneSound::PlayMode::Semi, 7);
     }
 }

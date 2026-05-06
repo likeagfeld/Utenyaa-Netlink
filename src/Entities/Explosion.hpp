@@ -88,11 +88,91 @@ namespace Entities
 			jo_3d_push_matrix();
 			jo_3d_translate_matrix_fixed(this->position.x.Value(), this->position.y.Value(), this->position.z.Value());
 			jo_3d_set_scale_fixed(this->scale.Value(), this->scale.Value(), this->scale.Value());
-			
+
 			Helpers::DrawSprite(Explosion::texture + this->frame);
 
 			jo_3d_pop_matrix();
 		}
 	};
-	
+
+	/** @brief Three-explosion sequencer — for player death + bomb hits.
+	 *
+	 * A single regular Explosion is too easy to miss in a busy match
+	 * (one 0.6 s sprite cycle at scale 0.25). For dramatic destruction
+	 * events (tank obliterated, bomb shot) we want a fireball CLUSTER:
+	 * three big explosions spawned at staggered times AND staggered
+	 * world offsets so the silhouette covers the entity for ~1 s.
+	 *
+	 * Stages:
+	 *   t = 0.00 s  →  Explosion at center,           scale 2.5
+	 *   t = 0.18 s  →  Explosion at +X,-Y,+Z offset,  scale 2.0
+	 *   t = 0.36 s  →  Explosion at -X,+Y,+Z offset,  scale 2.5
+	 * After stage 2 spawns, this sequencer self-deletes; the spawned
+	 * Explosion entities continue their own frame cycle independently
+	 * (each lives 0.6 s = 6 frames × FrameTime). Total visible cluster
+	 * = ~1.0 s (last spawn + last frame's lifetime).
+	 *
+	 * Not renderable itself — only updates a timer and spawns. Lives
+	 * for ~0.36 s before deleting itself.
+	 */
+	struct BigExplosion : public IUpdatable, TrackableObject<Entities::BigExplosion>
+	{
+	private:
+		Vec3   center;
+		Fxp    timer;
+		int    stage;   /* 0 = pending stage 1 spawn, 1 = pending stage 2, 2 = done */
+
+		void spawnStage(int n)
+		{
+			Vec3 pos = this->center;
+			Fxp  scale = Fxp(2.5);
+			if (n == 0) {
+				pos.z = pos.z + Fxp(2.0);
+				scale = Fxp(2.5);
+			} else if (n == 1) {
+				pos.x = pos.x + Fxp(2.5);
+				pos.y = pos.y - Fxp(1.5);
+				pos.z = pos.z + Fxp(3.5);
+				scale = Fxp(2.0);
+			} else if (n == 2) {
+				pos.x = pos.x - Fxp(2.0);
+				pos.y = pos.y + Fxp(2.5);
+				pos.z = pos.z + Fxp(3.0);
+				scale = Fxp(2.5);
+			} else {
+				return;
+			}
+			new Entities::Explosion(pos, scale);
+		}
+
+	public:
+		/* All members initialized in the body to sidestep a GCC
+		 * complaint about Fxp's literal ctor in the member-init
+		 * list. Functionally identical, just formally body-init. */
+		BigExplosion(Vec3& centerRef) : center(centerRef)
+		{
+			this->timer = Fxp(0.0);
+			this->stage = 0;
+			/* Stage 0 fires immediately on construction so the boom
+			 * starts on the same frame as the death event. */
+			this->spawnStage(0);
+			this->stage = 1;
+		}
+
+		void Update() override
+		{
+			this->timer += Fxp::BuildRaw(delta_time);
+			if (this->stage == 1 && this->timer >= Fxp(0.18))
+			{
+				this->spawnStage(1);
+				this->stage = 2;
+			}
+			else if (this->stage == 2 && this->timer >= Fxp(0.36))
+			{
+				this->spawnStage(2);
+				delete this;
+				return;
+			}
+		}
+	};
 }

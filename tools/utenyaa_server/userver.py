@@ -1425,20 +1425,36 @@ class UtenyaaServer:
 
     def _commit_map_pick(self) -> tuple[str, int]:
         """Resolve the vote tally to a winning map. Returns
-        (slug, idx). Highest votes wins; random tiebreak; if no
-        votes at all, pick a random map from the pool."""
+        (slug, idx). Highest votes wins; random tiebreak. If
+        nobody voted (all clients pressed START without any A
+        presses, or votes got dropped) we fall back to the
+        FIRST map in the list — which is always a baked stage
+        — rather than picking randomly. Random fallback was
+        observed as "the level I selected isn't the one that
+        loaded": the operator scrolled their cursor to a map
+        but never tapped A to vote, server saw zero votes and
+        rolled the dice. Deterministic fallback to baked Island
+        is much less surprising than "got a random custom map
+        I didn't choose"."""
         if not self.map_pick_list:
             return ("", 0)
         tally: dict[int, int] = {}
         for idx in self.map_pick_votes.values():
             tally[idx] = tally.get(idx, 0) + 1
+        log.info("MAP_PICK commit: tally=%r (votes from %d clients)",
+                 tally, len(self.map_pick_votes))
         if tally:
             top = max(tally.values())
             winners = [i for i, v in tally.items() if v == top]
             chosen = random.choice(winners)
         else:
-            chosen = random.randrange(len(self.map_pick_list))
+            # Deterministic — first map in list (baked Island, always
+            # present at idx 0). User pressed START with no votes;
+            # don't surprise them.
+            chosen = 0
         m = self.map_pick_list[chosen]
+        log.info("MAP_PICK winner: idx=%d slug=%r source=%d",
+                 chosen, m["slug"], m["source"])
         return (m["slug"], chosen)
 
     def _on_start_game_req(self, c: ClientInfo):
