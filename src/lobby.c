@@ -532,9 +532,19 @@ void lobby_draw(void)
                     /* Column 35 in pixel-x, centered:
                      *   FONT_X(35) = -160 + 35*8 = 120.
                      * Add +4 for the cell center (cell origin is
-                     * left edge). y center = FONT_Y(7+i) + 4. */
+                     * left edge). y center = FONT_Y(7+i) + 4.
+                     *
+                     * Empirical y offset: jo_sprite_draw3D projects
+                     * via the SGL camera (set up at boot for the
+                     * gameplay camera angle), so the world-Y → pixel-Y
+                     * mapping isn't 1:1 when scale != 1.0. Operator
+                     * reported "sprite character images appear on
+                     * lines 3 and 4... do not match up to lines 1
+                     * and 2 where the 2 active players were" — a
+                     * +2 row (= +16 pixel) downshift. Subtract 16
+                     * from sy to compensate. */
                     int sx = -160 + 35 * 8 + 4;
-                    int sy = -112 + (7 + i) * 8 + 4;
+                    int sy = -112 + (7 + i) * 8 + 4 - 16;
                     jo_sprite_change_sprite_scale(0.5f);
                     jo_sprite_draw3D(sprite_id, sx, sy, 500);
                     jo_sprite_restore_sprite_scale();
