@@ -19,6 +19,11 @@
 #include "map_pick.h"
 #include "utenyaa_online_bridge.hpp"
 #include "Entities/Player.hpp"
+#include "Entities/Bullet.hpp"
+#include "Entities/Mine.hpp"
+#include "Entities/Bomb.hpp"
+#include "Entities/Explosion.hpp"
+#include <stdio.h>                 /* snprintf for VDP_PEAK diagnostic */
 
 /* === C-linkage shims so the C lobby/screen code can read C++ engine
  *     state (sprite slots, character counts) without including C++. === */
@@ -308,6 +313,60 @@ int main()
 
 			// Update entities
 			for (auto* object : IUpdatable::objects) object->Update();
+
+			/* VDP1 redline-artifact diagnostic. Operator reports random
+			 * red lines / garbage flashing during play. Hardware suspects:
+			 *   (a) VDP1 cmd-table pressure when many simultaneous
+			 *       polygon-bearing entities overlap on screen
+			 *       (BigExplosion = 5 child Explosions × N players +
+			 *       bullets + mines + bombs + map quads + HUD)
+			 *   (b) Heap fragmentation from new/delete during render
+			 *       corrupting the cmd table buffer
+			 *   (c) Polygon vertex coords clipping near INT16 boundaries
+			 *
+			 * Per-frame counter tracks the peak concurrent IRenderable
+			 * count and per-type peaks for the high-pressure entities.
+			 * Logs ONLY when a new high-water mark is hit (one line per
+			 * peak — quiet otherwise). When the operator next reports
+			 * a red-line event, the journal will show the entity
+			 * watermarks at the time, conclusively pointing at the
+			 * cause (or eliminating cmd-table pressure if peaks are
+			 * low when artifacts appear).
+			 *
+			 * Resets at match start via the worldPtr==nullptr block
+			 * above (which also resets Settings::IsActive). */
+			{
+				static int s_peak_total = 0;
+				static int s_peak_update = 0;
+				static int s_peak_expl = 0;
+				static int s_peak_big = 0;
+				static int s_peak_bul = 0;
+				static int s_peak_mine = 0;
+				static int s_peak_bomb = 0;
+				int n_total = (int)IRenderable::objects.size();
+				int n_update = (int)IUpdatable::objects.size();
+				int n_expl = (int)TrackableObject<Entities::Explosion>::objects.size();
+				int n_big = (int)TrackableObject<Entities::BigExplosion>::objects.size();
+				int n_bul = (int)TrackableObject<Entities::Bullet>::objects.size();
+				int n_mine = (int)TrackableObject<Entities::Mine>::objects.size();
+				int n_bomb = (int)TrackableObject<Entities::Bomb>::objects.size();
+				bool new_peak = false;
+				if (n_total > s_peak_total) { s_peak_total = n_total; new_peak = true; }
+				if (n_update > s_peak_update) { s_peak_update = n_update; new_peak = true; }
+				if (n_expl  > s_peak_expl)   { s_peak_expl  = n_expl;  new_peak = true; }
+				if (n_big   > s_peak_big)    { s_peak_big   = n_big;   new_peak = true; }
+				if (n_bul   > s_peak_bul)    { s_peak_bul   = n_bul;   new_peak = true; }
+				if (n_mine  > s_peak_mine)   { s_peak_mine  = n_mine;  new_peak = true; }
+				if (n_bomb  > s_peak_bomb)   { s_peak_bomb  = n_bomb;  new_peak = true; }
+				if (new_peak) {
+					char buf[96];
+					snprintf(buf, sizeof(buf),
+					         "VDP_PEAK r=%d u=%d ex=%d bg=%d bul=%d mn=%d bm=%d",
+					         n_total, n_update, n_expl, n_big,
+					         n_bul, n_mine, n_bomb);
+					unet_send_dbg_log(buf);
+				}
+			}
 
 			// Apply server PLAYER_SYNC snapshots to remote players AFTER their
 			// Update() so the overwrite is authoritative this frame (lerp+extrap).
