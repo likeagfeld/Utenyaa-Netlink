@@ -17,6 +17,7 @@
 #include "net/utenyaa_map_stream.h"
 #include "net/utenyaa_protocol.h"   /* UNET_STAGE_STREAMED */
 #include "map_pick.h"
+#include "cc_download.h"
 #include "utenyaa_online_bridge.hpp"
 #include "Entities/Player.hpp"
 #include "Entities/Bullet.hpp"
@@ -29,9 +30,15 @@
  *     state (sprite slots, character counts) without including C++. === */
 extern "C" int unet_glue_num_characters(void)
 {
-	/* CHARS.PAK ships 25 textures × 5 frames per character = 5 chars.
-	 * Hardcoded constant matches Player::FramesPerController. */
-	return 5;
+	/* CHARS.PAK ships 25 textures × 5 frames per character = 5 chars
+	 * built-in. Phase D extends the selectable range to also include
+	 * any custom characters the operator has downloaded this session
+	 * via the Title-screen "Download Characters" flow. The lobby
+	 * picker (next_available_character) auto-extends; Player::Draw
+	 * clamps to the built-in range with a fallback render for
+	 * character_id ≥ 5 since custom-sprite VDP1 slot loading isn't
+	 * shipped yet. */
+	return 5 + cc_download_count();
 }
 
 extern "C" int unet_glue_character_sprite_for(uint8_t character_id)

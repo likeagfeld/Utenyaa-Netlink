@@ -735,6 +735,22 @@ namespace Entities
 					}
 				}
 			}
+			/* Phase D minimum: custom-character VDP1 slot loading is
+			 * deferred. CHARS.PAK is loaded with 5 built-in characters
+			 * (indices 0..4 → sprites 0..24); indexing past that for a
+			 * downloaded custom (character_id ≥ 5) would draw past the
+			 * loaded textures and render garbage. Fallback: clamp the
+			 * draw index to a safe built-in. character_id mod 5 keeps
+			 * variety so different remote players picking different
+			 * customs render as DIFFERENT default characters rather
+			 * than all collapsing to char 0. The "random catgirl"
+			 * spec in the design doc is approximated by deterministic
+			 * mod — same character every render for stability across
+			 * frames so the player doesn't visually thrash. */
+			const int kBuiltinChars = 5;
+			if (charIdx >= kBuiltinChars) {
+				charIdx = charIdx % kBuiltinChars;
+			}
 			int index = (this->health > 0) ? charIdx : 4;
 			int ang = Trigonometry::RadiansToDeg(this->angle);
 			int frame = 0;
