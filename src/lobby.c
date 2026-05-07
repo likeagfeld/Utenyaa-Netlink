@@ -482,81 +482,62 @@ void lobby_draw(void)
      * "P2:" line, no vote tally — these were all writing strings
      * containing 'P2: ' / '2: ' bytes that recurred as the literal
      * value of the recurring jo_free 'Bad pointer 0x..323A20' crash. */
-    /* Roster layout — text columns + a small per-row character sprite
-     * aligned with each row. Operator-reported: "names and player
-     * sprites in the lobby are not horizontally aligned... the player
-     * sprites are also overlapping some column header text." Older
-     * layout had two big 16-px sprites stacked at upper-right; their
-     * Y range overlapped row 6 (the column header). Per-row small
-     * sprites at half-scale (8 px tall) fit exactly inside one
-     * 8-pixel text row, so each row's sprite is on the same line
-     * as that row's name. Header column "SPR" is just padding
-     * preserving the text layout — the actual sprite is drawn over
-     * the text plane with VDP1 priority. Roster rows shrink the
-     * status width so the sprite has clearance at the right. */
+    /* Roster layout — every-other-row to give the native-size 16×16
+     * character sprite room to sit without overlapping adjacent
+     * roster lines. Operator: "the sprite previews are too small,
+     * lets go back to the old sprite preview sizes in lobby... but
+     * lets put player names and their sprites on every other line so
+     * that we dont have overlap anymore."
+     *
+     * Per slot i (0..3): name on row 7+i*2, sprite straddles rows
+     * 7+i*2 and 8+i*2 (16 px tall = exactly 2 text rows). 4 player
+     * slots × 2 rows = rows 7-14. PRESS START at row 17 still clear. */
     font_draw("#  NAME             CHAR STATUS  SPR ", FONT_X(1), FONT_Y(6), 500);
     for (i = 0; i < UNET_MAX_LOBBY; i++) {
+        const int name_row = 7 + i * 2;
         if (i < nd->lobby_count && nd->lobby_players[i].active) {
             const unet_lobby_player_t* lp = &nd->lobby_players[i];
             char marker = (lp->id == nd->my_user_id) ? '>' : ' ';
-            /* Show character_id in the roster row so each player can
-             * see which color is assigned to which slot — operator-
-             * reported "P2 doesn't show a character_id" couldn't be
-             * verified visually before this column existed. 0xFF
-             * renders as "--" (server hasn't assigned yet). */
             char char_buf[4];
             if (lp->character_id == 0xFF)
                 snprintf(char_buf, sizeof(char_buf), "--");
             else
                 snprintf(char_buf, sizeof(char_buf), "%2u", (unsigned)lp->character_id);
-            font_printf(FONT_X(1), FONT_Y(7 + i), 500,
+            font_printf(FONT_X(1), FONT_Y(name_row), 500,
                         "%c%-2d %-16s %2s   %-5s     ",
                         marker, i + 1, lp->name, char_buf,
                         lp->ready ? "READY" : "");
-            /* Per-row character sprite. Half-scale (0.5×) shrinks the
-             * native 16×16 to 8×8 — exactly one 8-pixel text row tall,
-             * so it sits cleanly aligned with the name on the same
-             * line. Centered at column ~35 (SPR header column).
-             * jo_sprite_draw3D uses center-screen coordinates: x is
-             * pixel-x relative to TV centre, y is pixel-y. Our row
-             * center is at FONT_Y(7+i) + 4 (mid of the 8-px row).
-             *
-             * Rendering uses unet_glue_character_sprite_for which
-             * already handles built-in vs custom (cc_download lookup
-             * + fallback) — same path as the in-game tank, so the
-             * lobby roster matches what the player will see. */
+            /* Native-size sprite (no scale change) — 16×16 spans
+             * exactly 2 text rows, the slot's allotted vertical
+             * space. The earlier full-size top-right preview at
+             * (110, -72) positioned correctly without any pixel
+             * compensation, so at scale=1.0 the SGL projection IS
+             * pixel-1:1; the +16 compensation we needed for scale
+             * 0.5 doesn't apply here. */
             if (lp->character_id != 0xFF
                 && lp->character_id < (uint8_t)unet_glue_num_characters()) {
                 int sprite_id = unet_glue_character_sprite_for(lp->character_id);
                 if (sprite_id >= 0) {
-                    /* Column 35 in pixel-x, centered:
-                     *   FONT_X(35) = -160 + 35*8 = 120.
-                     * Add +4 for the cell center (cell origin is
-                     * left edge). y center = FONT_Y(7+i) + 4.
-                     *
-                     * Empirical y offset: jo_sprite_draw3D projects
-                     * via the SGL camera (set up at boot for the
-                     * gameplay camera angle), so the world-Y → pixel-Y
-                     * mapping isn't 1:1 when scale != 1.0. Operator
-                     * reported "sprite character images appear on
-                     * lines 3 and 4... do not match up to lines 1
-                     * and 2 where the 2 active players were" — a
-                     * +2 row (= +16 pixel) downshift. Subtract 16
-                     * from sy to compensate. */
+                    /* x: column 35 centre.
+                     * y: midpoint of the 2-row pair (8 px below
+                     *    the top of name_row), so the 16-px sprite
+                     *    centred there spans both rows exactly. */
                     int sx = -160 + 35 * 8 + 4;
-                    int sy = -112 + (7 + i) * 8 + 4 - 16;
-                    jo_sprite_change_sprite_scale(0.5f);
+                    int sy = -112 + name_row * 8 + 8;
                     jo_sprite_draw3D(sprite_id, sx, sy, 500);
-                    jo_sprite_restore_sprite_scale();
                 }
             }
-        } else {
-            /* Pad vacated slot with spaces so a previously-occupied
-             * row doesn't show stale data after a player leaves
-             * (no per-frame jo_clear_screen anymore). Width matches
-             * the new active-row format including the SPR column. */
+            /* Pad the EXTENSION row (name_row+1) so old text from
+             * a former 1-row layout this boot doesn't bleed through
+             * the gap below the name. */
             font_draw("                                       ",
-                      FONT_X(1), FONT_Y(7 + i), 500);
+                      FONT_X(1), FONT_Y(name_row + 1), 500);
+        } else {
+            /* Pad both rows of a vacated slot. */
+            font_draw("                                       ",
+                      FONT_X(1), FONT_Y(name_row), 500);
+            font_draw("                                       ",
+                      FONT_X(1), FONT_Y(name_row + 1), 500);
         }
     }
 
