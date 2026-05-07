@@ -57,13 +57,22 @@ static int  s_dl_request_timer;   /* frames since we last sent a request */
 static int  s_list_wait_timer;    /* frames since CC_LIST_REQ sent */
 static int  s_a_held_prev;        /* edge-detect on A at DONE/FAILED */
 
-/* Phase D — VDP1 sprite-slot registration. JO_MAX_SPRITE was bumped
- * to 130 in the makefile (was 100); base CHARS.PAK + EXP.PAK + WEAP.PAK
- * etc. consume ~103 slots — that leaves ~25 free for custom chars,
- * so we cap at 5 registered customs (5 × 5 frames = 25 slots).
- * Phase D follow-up: per-match dynamic loading of just the chars
- * actually selected (max 4 unique players) which would let us
- * support more customs without raising JO_MAX_SPRITE further. */
+/* Phase D — VDP1 sprite-slot registration. The Phase D commit had
+ * bumped JO_MAX_SPRITE 100→130 to make room for customs, but the
+ * extra 30 slots × sizeof(jo_3d_quad)=32 = 960 extra bytes inside
+ * the 250 KB jo_malloc pool pushed peak boot allocation
+ * (LOGO.TGA stream 123,452 + decoded 122,888 + sprite_quad 4,168 =
+ * 250,508) past the pool ceiling and triggered "LOGO.TGA: Out of
+ * Memory" in __jo_tga_load. JO_MAX_SPRITE has been reverted to 100
+ * (alpha-0.7 baseline) so LOGO.TGA fits with a 452-byte margin.
+ *
+ * Consequence: ccd_register_sprites attempts jo_sprite_add but the
+ * 100-slot pool is already fully consumed by base CHARS/EXP/WEAP/HUD
+ * PAKs — every call returns -1 and Player::Draw's fallback path
+ * (charIdx % kBuiltinChars) renders downloaded customs as their
+ * built-in counterpart. This is intentional for the 0.9 hotfix; a
+ * proper Phase D follow-up would dynamically swap slots on match
+ * start to load just the 4 chars actually picked. */
 #define CC_MAX_REGISTERED  5
 
 /* CCD_MAX = the cap on how many characters this Saturn caches in
