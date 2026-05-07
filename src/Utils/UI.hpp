@@ -7,6 +7,10 @@
 #include "Message.hpp"
 #include "Settings.hpp"
 #include "../net/utenyaa_game.h"   /* g_Game for online-mode gating */
+#include "../net/utenyaa_net.h"    /* unet_get_data() for online char_id lookup */
+extern "C" {
+#include "../cc_download.h"        /* cc_download_get_sprite_id for custom HUD portrait */
+}
 
 namespace UI
 {
@@ -217,7 +221,63 @@ namespace UI
 					jo_sprite_draw3D2(powerupType[player] - 1, headLocations[player][X] - 8, headLocations[player][Y] + 16, 50);
 				}
 
-				jo_sprite_draw3D2(3 + (player * 4) + offset, headLocations[player][X], headLocations[player][Y], 50);
+				/* Big-circle character portrait. HUD.PAK ships 4 builtin
+				 * portraits × 4 health states, indexed by player slot
+				 * (sprite_id = 3 + player*4 + offset). When the player
+				 * has a CUSTOM character (char_id >= 5), we'd otherwise
+				 * show the built-in portrait for slot N — operator-
+				 * reported "the big circle preview of the character in
+				 * game when playing as custom character should be
+				 * replaced with an enlarged version of their forward
+				 * facing sprite."
+				 *
+				 * Approach: look up the player's character_id from the
+				 * net state (online) or fall back to slot index
+				 * (offline). If char_id is a registered custom
+				 * (cc_download_get_sprite_id returns >= 0), draw the
+				 * custom's frame-0 sprite scaled 2x at the same head
+				 * location. Otherwise the built-in HUD portrait
+				 * renders unchanged. */
+				int hud_char_id = (int)player;   /* default — offline / unknown */
+				if (g_Game.isOnlineMode)
+				{
+					const unet_state_data_t* nd = unet_get_data();
+					for (int ri = 0; ri < nd->game_roster_count; ri++)
+					{
+						if (nd->game_roster[ri].active &&
+							nd->game_roster[ri].id == (uint8_t)player)
+						{
+							hud_char_id = (int)nd->game_roster[ri].character_id;
+							break;
+						}
+					}
+				}
+				int custom_sprite = -1;
+				if (hud_char_id >= 5)
+				{
+					custom_sprite = cc_download_get_sprite_id(hud_char_id - 5);
+				}
+				if (custom_sprite >= 0)
+				{
+					/* Scale the 16x16 custom sprite up to roughly the
+					 * same footprint as the built-in HUD portrait
+					 * (~32x32). Scale 2.0× is the cleanest doubling on
+					 * VDP1's bilinear-free scaler. Using
+					 * jo_sprite_change_sprite_scale + draw + restore
+					 * scopes the zoom to this one sprite — the next
+					 * jo_sprite_draw3D2 calls (cooldown text, etc.)
+					 * use the unscaled default. */
+					jo_sprite_change_sprite_scale(2.0f);
+					jo_sprite_draw3D2(custom_sprite,
+						headLocations[player][X],
+						headLocations[player][Y], 50);
+					jo_sprite_restore_sprite_scale();
+				}
+				else
+				{
+					jo_sprite_draw3D2(3 + (player * 4) + offset,
+						headLocations[player][X], headLocations[player][Y], 50);
+				}
 
 				/* Cooldown indicator. -1 means we don't have data for this
 				 * slot (remote online players — we don't see their reload
