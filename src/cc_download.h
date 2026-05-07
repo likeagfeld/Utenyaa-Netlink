@@ -43,6 +43,19 @@ const unsigned char* cc_download_get_payload(int idx, int* out_size);
  * Phase D integration reads this to size the lobby char picker. */
 int cc_download_count(void);
 
+/* Phase D — VDP1 sprite slot lookup for a downloaded custom
+ * character. `local_idx` is 0..cc_download_count()-1 (= server
+ * character_id minus 5). Returns the FIRST sprite ID (south frame)
+ * for that character, with the next 4 frames at consecutive IDs,
+ * or -1 if the character hasn't been registered as VDP1 sprites
+ * yet. Only the first CC_MAX_REGISTERED downloads get VDP1 slots
+ * to keep VRAM usage bounded. */
+int cc_download_get_sprite_id(int local_idx);
+
+/* How many of the downloaded characters were successfully written
+ * into VDP1 sprite slots. Capped at CC_MAX_REGISTERED. */
+int cc_download_registered_count(void);
+
 #ifdef __cplusplus
 }
 #endif

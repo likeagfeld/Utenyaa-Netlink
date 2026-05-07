@@ -20,6 +20,10 @@
 
 #include "../Messages/Damage.hpp"
 #include "../Messages/Pickup.hpp"
+
+extern "C" {
+#include "../cc_download.h"
+}
 #include "../Messages/QueryController.hpp"
 
 #include "../Utils/Helpers.hpp"
@@ -735,21 +739,30 @@ namespace Entities
 					}
 				}
 			}
-			/* Phase D minimum: custom-character VDP1 slot loading is
-			 * deferred. CHARS.PAK is loaded with 5 built-in characters
-			 * (indices 0..4 → sprites 0..24); indexing past that for a
-			 * downloaded custom (character_id ≥ 5) would draw past the
-			 * loaded textures and render garbage. Fallback: clamp the
-			 * draw index to a safe built-in. character_id mod 5 keeps
-			 * variety so different remote players picking different
-			 * customs render as DIFFERENT default characters rather
-			 * than all collapsing to char 0. The "random catgirl"
-			 * spec in the design doc is approximated by deterministic
-			 * mod — same character every render for stability across
-			 * frames so the player doesn't visually thrash. */
+			/* Phase D — custom-character render path with built-in
+			 * fallback. character_id ≥ 5 means a custom character.
+			 * Two render paths:
+			 *
+			 *  (1) Player downloaded this custom locally AND the
+			 *      sprite was registered into VDP1 (cc_download.c
+			 *      registers up to CC_MAX_REGISTERED at download-done).
+			 *      Use the registered sprite directly.
+			 *
+			 *  (2) Player doesn't have this custom (didn't download,
+			 *      or it's beyond CC_MAX_REGISTERED). Fall back to
+			 *      built-in (charIdx mod kBuiltinChars) — different
+			 *      customs render as different built-ins for visual
+			 *      distinction without forcing a download. */
 			const int kBuiltinChars = 5;
+			int customSpriteId = -1;
 			if (charIdx >= kBuiltinChars) {
-				charIdx = charIdx % kBuiltinChars;
+				int local_idx = charIdx - kBuiltinChars;
+				customSpriteId = cc_download_get_sprite_id(local_idx);
+				if (customSpriteId < 0) {
+					/* Fallback: render as a built-in. mod-5 keeps
+					 * variety + stability across frames. */
+					charIdx = charIdx % kBuiltinChars;
+				}
 			}
 			int index = (this->health > 0) ? charIdx : 4;
 			int ang = Trigonometry::RadiansToDeg(this->angle);
@@ -795,8 +808,15 @@ namespace Entities
 			
 			jo_3d_set_scale_fixed(mirror.Value(), Fxp(0.4).Value(), Fxp(0.4).Value());
 
-			Helpers::DrawSprite(this->CharacterSpiteStart + (index * Player::FramesPerController) + frame);
-			
+			if (customSpriteId >= 0 && this->health > 0) {
+				/* Phase D — registered custom character. The sprite
+				 * was added with 5 sequential IDs (one per facing
+				 * frame), so the actual sprite is base + frame. */
+				Helpers::DrawSprite(customSpriteId + frame);
+			} else {
+				Helpers::DrawSprite(this->CharacterSpiteStart + (index * Player::FramesPerController) + frame);
+			}
+
 			jo_3d_pop_matrix();
 		}
 	};

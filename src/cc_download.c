@@ -66,6 +66,65 @@ static uint8_t s_payloads[CCD_MAX][UNET_CC_PAYLOAD_BYTES];
 static bool    s_payload_valid[CCD_MAX];
 static int     s_payload_count;
 
+/* Phase D — VDP1 sprite-slot registration. JO_MAX_SPRITE was bumped
+ * to 130 in the makefile (was 100); base CHARS.PAK + EXP.PAK + WEAP.PAK
+ * etc. consume ~103 slots — that leaves ~25 free for custom chars,
+ * so we cap at 5 registered customs (5 × 5 frames = 25 slots).
+ * Phase D follow-up: per-match dynamic loading of just the chars
+ * actually selected (max 4 unique players) which would let us
+ * support more customs without raising JO_MAX_SPRITE further. */
+#define CC_MAX_REGISTERED  5
+/* -1 means "not yet registered". A static int array initializes to
+ * 0 by default, which is a valid sprite slot (sprite 0 = built-in
+ * char 0 frame 0); using -1 prevents accidental aliasing before
+ * the first download completes. */
+static int s_sprite_id_for_custom[CC_MAX_REGISTERED] = { -1, -1, -1, -1, -1 };
+static int s_registered_count;
+static bool s_sprites_registered_this_session;
+
+/* Register up to CC_MAX_REGISTERED downloaded characters as VDP1
+ * sprites. Each character produces 5 sequential sprite IDs (one per
+ * frame). Called once when CCD transitions to DONE — running it
+ * again across boot cycles is unsafe because jo_sprite_add allocates
+ * VRAM monotonically without a free path. */
+static void ccd_register_sprites(void)
+{
+    if (s_sprites_registered_this_session) return;
+    s_sprites_registered_this_session = true;
+
+    int registered = 0;
+    int i, fi;
+    for (i = 0; i < s_payload_count && registered < CC_MAX_REGISTERED; i++) {
+        if (!s_payload_valid[i]) continue;
+        const uint8_t* payload = s_payloads[i];
+        /* Header is 88 bytes; frame data starts at offset 88. Each
+         * frame is 16×16×2 = 512 bytes (UNET_CC_FRAME_BYTES). */
+        int first_sprite_id = -1;
+        for (fi = 0; fi < UNET_CC_FRAMES; fi++) {
+            jo_img img;
+            img.width  = UNET_CC_W;
+            img.height = UNET_CC_H;
+            /* Cast away const — jo_sprite_add's jo_img has non-const
+             * data ptr but doesn't actually mutate during DMA. */
+            img.data   = (void*)(payload + 88 + fi * UNET_CC_FRAME_BYTES);
+            int sid = jo_sprite_add(&img);
+            if (fi == 0) first_sprite_id = sid;
+            if (sid < 0) {
+                first_sprite_id = -1;
+                break;   /* JO_MAX_SPRITE exhausted; bail this char */
+            }
+        }
+        s_sprite_id_for_custom[registered] = first_sprite_id;
+        registered++;
+    }
+    /* Mark unused slots invalid. */
+    for (; registered < CC_MAX_REGISTERED; registered++)
+        s_sprite_id_for_custom[registered] = -1;
+    s_registered_count = 0;
+    for (i = 0; i < CC_MAX_REGISTERED; i++)
+        if (s_sprite_id_for_custom[i] >= 0) s_registered_count++;
+}
+
 #define CCD_LIST_TIMEOUT_FRAMES   600   /* 10s @ 60fps */
 #define CCD_DL_TIMEOUT_FRAMES     900   /* 15s per character */
 #define CCD_REREQUEST_FRAMES      300   /* re-send DOWNLOAD_REQ if stalled */
@@ -100,6 +159,12 @@ void cc_download_init(void)
     s_a_held_prev = 0;
     s_payload_count = 0;
     for (i = 0; i < CCD_MAX; i++) s_payload_valid[i] = false;
+    /* Don't clear s_sprite_id_for_custom on re-entry — sprite slots
+     * registered in a prior download flow this boot should survive
+     * (jo_sprite_add can't free, and re-registering would burn more
+     * slots). The user's intent on re-running download is "refresh
+     * the catalog"; sprite registration can't be redone safely so
+     * we keep the original slots until reboot. */
 
     unet_cc_reset_state();
     /* Nudge into WAITING_LIST immediately. */
@@ -150,11 +215,16 @@ void cc_download_tick(void)
             unet_cc_consume_complete();
             s_dl_idx++;
             ccd_request_next();
+            /* If ccd_request_next saw end-of-list, it transitioned
+             * us to CCD_DONE — register VDP1 sprites now while we're
+             * still on the download screen (idle frame budget). */
+            if (s_state == CCD_DONE) ccd_register_sprites();
         } else if (s_dl_request_timer > CCD_DL_TIMEOUT_FRAMES) {
             /* Timeout — give up on this character, advance. If too
              * many fail, the user will see a reduced count at DONE. */
             s_dl_idx++;
             ccd_request_next();
+            if (s_state == CCD_DONE) ccd_register_sprites();
         } else if (s_dl_request_timer > 0
                    && (s_dl_request_timer % CCD_REREQUEST_FRAMES) == 0
                    && !nd->cc_dl_active) {
@@ -263,4 +333,15 @@ const unsigned char* cc_download_get_payload(int idx, int* out_size)
 int cc_download_count(void)
 {
     return s_payload_count;
+}
+
+int cc_download_get_sprite_id(int local_idx)
+{
+    if (local_idx < 0 || local_idx >= CC_MAX_REGISTERED) return -1;
+    return s_sprite_id_for_custom[local_idx];
+}
+
+int cc_download_registered_count(void)
+{
+    return s_registered_count;
 }
