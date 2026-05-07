@@ -477,6 +477,61 @@ namespace Objects
 			}
 		}
 
+		/* Diagnostic: dump the final SGL vertex assignment for one
+		 * sample tile per stored-rotation value (0..3). Combined with
+		 * the editor's known UV computation we can determine, byte-
+		 * by-byte, where the editor preview and the Saturn render
+		 * disagree — and prove whether the divergence is universal
+		 * across maps or map-specific.
+		 *
+		 * Format per line:
+		 *   TILE_ROT_DBG (x,y) rot=R tex=T V0=L0 V1=L1 V2=L2 V3=L3
+		 * where each L is one of TR/BR/BL/TL — the screen-corner
+		 * label of that vertex slot. SGL Dual_Plane assigns standard
+		 * UVs (0,0)/(1,0)/(1,1)/(0,1) to V[0]/V[1]/V[2]/V[3] in
+		 * order, so V[0]'s corner label IS the texture origin —
+		 * that's the rotation visualised on screen.
+		 *
+		 * Sampling: walk row-major and pick the FIRST tile we see
+		 * with each rot value 0..3. Emits at most 4 lines per match
+		 * — compact enough to read at a glance, complete enough to
+		 * fully characterise the rotation algorithm. */
+		{
+			int sampled[4] = { -1, -1, -1, -1 };  /* tile indices, -1 = none */
+			for (int i = 0; i < Map::MapDimensionSize * Map::MapDimensionSize; i++) {
+				const uint8_t* tb = reinterpret_cast<const uint8_t*>(&level->TileData[i]);
+				int r = (tb[0] >> 6) & 3;
+				if (sampled[r] < 0) sampled[r] = i;
+				if (sampled[0] >= 0 && sampled[1] >= 0 &&
+					sampled[2] >= 0 && sampled[3] >= 0) break;
+			}
+			for (int r = 0; r < 4; r++) {
+				if (sampled[r] < 0) continue;
+				int idx = sampled[r];
+				int tx = idx % Map::MapDimensionSize;
+				int ty = idx / Map::MapDimensionSize;
+				int tr_v = (int)Map::GetVertexIndex(tx + 1, ty);
+				int br_v = (int)Map::GetVertexIndex(tx + 1, ty + 1);
+				int bl_v = (int)Map::GetVertexIndex(tx,     ty + 1);
+				int tl_v = (int)Map::GetVertexIndex(tx,     ty);
+				const char* lab[4] = { "??", "??", "??", "??" };
+				for (int s = 0; s < 4; s++) {
+					int v = (int)this->mapMesh.pltbl[idx].Vertices[s];
+					if      (v == tr_v) lab[s] = "TR";
+					else if (v == br_v) lab[s] = "BR";
+					else if (v == bl_v) lab[s] = "BL";
+					else if (v == tl_v) lab[s] = "TL";
+				}
+				char buf[100];
+				snprintf(buf, sizeof(buf),
+					"TILE_ROT_DBG (%d,%d) rot=%d tex=%u V0=%s V1=%s V2=%s V3=%s",
+					tx, ty, r,
+					(unsigned)level->TileData[idx].Texture,
+					lab[0], lab[1], lab[2], lab[3]);
+				unet_send_dbg_log(buf);
+			}
+		}
+
 		// Load entities to spawn
 		EntityDefinitionsCount = level->EntityCount;
 		this->EntityDefinitions = new EntityCreationDefinition[level->EntityCount];
