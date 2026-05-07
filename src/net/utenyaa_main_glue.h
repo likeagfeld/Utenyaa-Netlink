@@ -33,6 +33,11 @@ void unet_glue_tick_frame(void);
 /** Start the online flow (called from the MainMenu ONLINE button). */
 void unet_glue_enter_online(void);
 
+/** Phase C — start the custom-character download flow (called from
+ *  the MainMenu "Download Custom Characters" button). Same dial flow
+ *  as enter_online, but post-auth routes to UGAME_STATE_DOWNLOAD_CHARS. */
+void unet_glue_enter_char_download(void);
+
 /** Number of distinct selectable characters in CHARS.PAK (one fewer than
  *  UNET_MAX_CHARACTERS in the protocol — the protocol leaves headroom for
  *  future asset growth). The lobby clamps cycling to this count. */

@@ -548,6 +548,183 @@ static void on_log(const uint8_t* p, int len)
 }
 
 /*============================================================================
+ * Phase C — Custom character listing + download receivers
+ *============================================================================*/
+
+/* Forward decl: defined later in this TU so the cc-send paths below
+ * can call it. Same signature as the actual definition. */
+static int simple_frame(uint8_t* buf, uint8_t op, int extra_len);
+
+uint16_t unet_cc_crc16(const uint8_t* data, int len)
+{
+    /* CRC-16/CCITT-FALSE — must match userver.crc16_ccitt_false. */
+    uint16_t crc = 0xFFFF;
+    int i, j;
+    for (i = 0; i < len; i++) {
+        crc ^= ((uint16_t)data[i]) << 8;
+        for (j = 0; j < 8; j++) {
+            if (crc & 0x8000) crc = (uint16_t)((crc << 1) ^ 0x1021);
+            else              crc = (uint16_t)(crc << 1);
+        }
+    }
+    return crc;
+}
+
+void unet_cc_reset_state(void)
+{
+    int i;
+    g_net.cc_list_count = 0;
+    g_net.cc_list_done = false;
+    g_net.cc_completed_count = 0;
+    g_net.cc_dl_idx = 0xFF;
+    g_net.cc_dl_total = 0;
+    g_net.cc_dl_num_chunks = 0;
+    g_net.cc_dl_expected_crc = 0;
+    g_net.cc_dl_received_bytes = 0;
+    g_net.cc_dl_active = false;
+    g_net.cc_dl_complete = false;
+    for (i = 0; i < (int)sizeof(g_net.cc_dl_chunks_seen); i++)
+        g_net.cc_dl_chunks_seen[i] = 0;
+}
+
+void unet_cc_reset_dl_slot(void)
+{
+    int i;
+    g_net.cc_dl_idx = 0xFF;
+    g_net.cc_dl_total = 0;
+    g_net.cc_dl_received_bytes = 0;
+    g_net.cc_dl_active = false;
+    g_net.cc_dl_complete = false;
+    for (i = 0; i < (int)sizeof(g_net.cc_dl_chunks_seen); i++)
+        g_net.cc_dl_chunks_seen[i] = 0;
+}
+
+void unet_cc_consume_complete(void)
+{
+    g_net.cc_dl_complete = false;
+}
+
+static void on_cc_list_resp(const uint8_t* p, int len)
+{
+    /* Body: [opcode][idx:1][slug:16 null-pad][name:24 null-pad] */
+    int needed = 1 + 1 + UNET_CC_LIST_ITEM_SLUG_LEN + UNET_CC_LIST_ITEM_NAME_LEN;
+    if (len < needed) return;
+    uint8_t idx = p[1];
+    if (idx >= UNET_CC_MAX) return;
+    int slug_off = 2;
+    int name_off = slug_off + UNET_CC_LIST_ITEM_SLUG_LEN;
+    int j;
+    for (j = 0; j < UNET_CC_LIST_ITEM_SLUG_LEN; j++) {
+        char c = (char)p[slug_off + j];
+        g_net.cc_list[idx].slug[j] = c ? c : '\0';
+        if (!c) break;
+    }
+    g_net.cc_list[idx].slug[UNET_CC_LIST_ITEM_SLUG_LEN] = '\0';
+    for (j = 0; j < UNET_CC_LIST_ITEM_NAME_LEN; j++) {
+        char c = (char)p[name_off + j];
+        g_net.cc_list[idx].name[j] = c ? c : '\0';
+        if (!c) break;
+    }
+    g_net.cc_list[idx].name[UNET_CC_LIST_ITEM_NAME_LEN] = '\0';
+    if ((int)idx + 1 > (int)g_net.cc_list_count)
+        g_net.cc_list_count = (uint8_t)(idx + 1);
+}
+
+static void on_cc_done(void)
+{
+    g_net.cc_list_done = true;
+}
+
+static void on_cc_begin(const uint8_t* p, int len)
+{
+    /* Body: [opcode][idx:1][total_size:2 BE][num_chunks:1][crc:2 BE] = 7 */
+    if (len < 7) return;
+    uint8_t  idx    = p[1];
+    uint16_t total  = (uint16_t)(((uint16_t)p[2] << 8) | (uint16_t)p[3]);
+    uint8_t  chunks = p[4];
+    uint16_t crc    = (uint16_t)(((uint16_t)p[5] << 8) | (uint16_t)p[6]);
+
+    if (total == 0 || total > UNET_CC_PAYLOAD_BYTES) return;
+    if (chunks == 0) return;
+
+    int i;
+    g_net.cc_dl_idx = idx;
+    g_net.cc_dl_total = total;
+    g_net.cc_dl_num_chunks = chunks;
+    g_net.cc_dl_expected_crc = crc;
+    g_net.cc_dl_received_bytes = 0;
+    g_net.cc_dl_active = true;
+    g_net.cc_dl_complete = false;
+    for (i = 0; i < (int)sizeof(g_net.cc_dl_chunks_seen); i++)
+        g_net.cc_dl_chunks_seen[i] = 0;
+    /* Zero the buffer so a missing chunk doesn't pass CRC by chance. */
+    for (i = 0; i < total && i < (int)sizeof(g_net.cc_dl_buf); i++)
+        g_net.cc_dl_buf[i] = 0;
+}
+
+static void on_cc_chunk(const uint8_t* p, int len)
+{
+    /* Body: [opcode][idx:1][chunk_idx:1][dlen:1][data:dlen] */
+    if (!g_net.cc_dl_active) return;
+    if (len < 4) return;
+    uint8_t cidx = p[1];
+    uint8_t chunk_idx = p[2];
+    uint8_t dlen = p[3];
+    if (cidx != g_net.cc_dl_idx) return;
+    if (chunk_idx >= g_net.cc_dl_num_chunks) return;
+    if (dlen == 0 || dlen > UNET_CC_CHUNK_DATA_MAX) return;
+    if (len < 4 + (int)dlen) return;
+    int offset = (int)chunk_idx * UNET_CC_CHUNK_DATA_MAX;
+    if (offset + (int)dlen > (int)g_net.cc_dl_total) return;
+    /* Idempotent: ignore duplicate chunks. */
+    if (g_net.cc_dl_chunks_seen[chunk_idx >> 3] & (1u << (chunk_idx & 7)))
+        return;
+    int j;
+    for (j = 0; j < (int)dlen; j++)
+        g_net.cc_dl_buf[offset + j] = p[4 + j];
+    g_net.cc_dl_chunks_seen[chunk_idx >> 3] |= (uint8_t)(1u << (chunk_idx & 7));
+    g_net.cc_dl_received_bytes = (uint16_t)(g_net.cc_dl_received_bytes + dlen);
+}
+
+static void on_cc_end(const uint8_t* p, int len)
+{
+    /* Body: [opcode][idx:1] */
+    if (len < 2) return;
+    if (!g_net.cc_dl_active) return;
+    if (p[1] != g_net.cc_dl_idx) return;
+    /* Verify all chunks received + CRC. */
+    int seen = 0, j;
+    for (j = 0; j < g_net.cc_dl_num_chunks; j++)
+        if (g_net.cc_dl_chunks_seen[j >> 3] & (1u << (j & 7))) seen++;
+    if (seen != g_net.cc_dl_num_chunks) {
+        g_net.cc_dl_active = false;
+        return;
+    }
+    uint16_t got = unet_cc_crc16(g_net.cc_dl_buf, g_net.cc_dl_total);
+    if (got != g_net.cc_dl_expected_crc) {
+        g_net.cc_dl_active = false;
+        return;
+    }
+    g_net.cc_dl_complete = true;
+    g_net.cc_dl_active = false;
+    if (g_net.cc_completed_count < UNET_CC_MAX)
+        g_net.cc_completed_count++;
+}
+
+void unet_send_cc_list_req(void)
+{
+    int n = simple_frame(g_net.tx_buf, UNET_CC_LIST_REQ, 0);
+    tx(g_net.tx_buf, n);
+}
+
+void unet_send_cc_download_req(uint8_t idx)
+{
+    int n = simple_frame(g_net.tx_buf, UNET_CC_DOWNLOAD_REQ, 1);
+    g_net.tx_buf[3] = idx;
+    tx(g_net.tx_buf, n);
+}
+
+/*============================================================================
  * RX dispatch
  *============================================================================*/
 
@@ -595,6 +772,11 @@ static void dispatch(const uint8_t* p, int len)
     case UNET_MSG_PLAYER_JOIN:       /* handled via LOBBY_STATE */ break;
     case UNET_MSG_PLAYER_LEAVE:      /* handled via LOBBY_STATE */ break;
     case UNET_MSG_PAUSE_ACK:         /* UI-only */ break;
+    case UNET_CC_LIST_RESP:          on_cc_list_resp(p, len); break;
+    case UNET_CC_DONE:               on_cc_done(); break;
+    case UNET_CC_BEGIN:              on_cc_begin(p, len); break;
+    case UNET_CC_CHUNK:              on_cc_chunk(p, len); break;
+    case UNET_CC_END:                on_cc_end(p, len); break;
     default: break;
     }
 }

@@ -17,6 +17,7 @@
 #include "../name_entry.h"
 #include "../lobby.h"
 #include "../map_pick.h"
+#include "../cc_download.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -148,8 +149,32 @@ void unet_glue_enter_online(void)
     /* Run heavy init exactly once, the first time the user picks online. */
     unet_glue_lazy_init_online();
     g_Game.isOnlineMode = true;
+    g_Game.downloadCharsMode = false;   /* normal online play, not char-DL */
     g_Game.gameState = UGAME_STATE_NAME_ENTRY;
     nameEntry_init();
+}
+
+/*============================================================================
+ * Phase C — title-screen "Download Custom Characters" entry point.
+ * Same dial flow as PlayOnline, but the post-auth transition routes
+ * to UGAME_STATE_DOWNLOAD_CHARS instead of UGAME_STATE_LOBBY (see the
+ * downloadCharsMode check in connecting.c).
+ *============================================================================*/
+
+void unet_glue_enter_char_download(void)
+{
+    unet_glue_lazy_init_online();
+    g_Game.isOnlineMode = true;
+    g_Game.downloadCharsMode = true;
+    /* Skip the name-entry screen — character download doesn't need a
+     * username; the server doesn't gate CC_LIST_REQ on auth identity.
+     * Use a fixed placeholder to keep the auth handshake happy. */
+    g_Game.playerName[0] = 'D';
+    g_Game.playerName[1] = 'L';
+    g_Game.playerName[2] = '\0';
+    g_Game.gameState = UGAME_STATE_CONNECTING;
+    /* Reset CC state so a prior aborted run doesn't leak state. */
+    unet_cc_reset_state();
 }
 
 /*============================================================================
@@ -163,6 +188,7 @@ bool unet_glue_is_online_screen_active(void)
     case UGAME_STATE_CONNECTING:
     case UGAME_STATE_LOBBY:
     case UGAME_STATE_MAP_PICK:
+    case UGAME_STATE_DOWNLOAD_CHARS:
         return true;
     default:
         return false;
@@ -250,6 +276,11 @@ void unet_glue_tick_frame(void)
     case UGAME_STATE_MAP_PICK:
         map_pick_input();
         map_pick_draw();
+        break;
+    case UGAME_STATE_DOWNLOAD_CHARS:
+        cc_download_input();
+        cc_download_tick();
+        cc_download_draw();
         break;
     default:
         break;

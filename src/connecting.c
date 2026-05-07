@@ -8,6 +8,7 @@
 #include <jo/jo.h>
 #include "connecting.h"
 #include "lobby.h"
+#include "cc_download.h"
 #include "font.h"
 #include "net/utenyaa_game.h"
 #include "net/utenyaa_net.h"
@@ -192,8 +193,17 @@ void connecting_update(void)
         unet_set_transport(&g_saturn_transport);
         unet_on_connected();
         jo_clear_screen();
-        g_Game.gameState = UGAME_STATE_LOBBY;
-        lobby_init();
+        if (g_Game.downloadCharsMode) {
+            /* Phase C: skip lobby, go to char-download state. The
+             * cc_download module's tick takes over from here, sends
+             * CC_LIST_REQ once, downloads each character, and on done
+             * transitions back to title with disconnect. */
+            g_Game.gameState = UGAME_STATE_DOWNLOAD_CHARS;
+            cc_download_init();
+        } else {
+            g_Game.gameState = UGAME_STATE_LOBBY;
+            lobby_init();
+        }
         break;
 
     case CONNECT_STAGE_FAILED:

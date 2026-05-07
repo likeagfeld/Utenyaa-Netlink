@@ -76,6 +76,13 @@ namespace UI
             PlayOnline() : ActionButton(9, 17) {}
         };
 
+        struct DownloadCharacters : Settings, ActionButton
+        {
+            std::string Text() const { return "Download Characters"; }
+            void PerformAction() { unet_glue_enter_char_download(); }
+            DownloadCharacters() : ActionButton(9, 18) {}
+        };
+
         // Pause menu
 
         struct Unpause : Settings, ActionButton
@@ -166,7 +173,7 @@ namespace UI
              * then back UP to Credits. User-reported as "scroll
              * reversed". Visual top→bottom is Play (15), Credits (16),
              * PlayOnline (17), so list them in that order here. */
-            new ButtonGroup<GoToMainMenu, GoToCredits, PlayOnline>,
+            new ButtonGroup<GoToMainMenu, GoToCredits, PlayOnline, DownloadCharacters>,
             new ButtonGroup<ReyMe, DannyDuarte, am25, Random, AnriFox>,
             new ButtonGroup<StageSelector, PlayerCountSelector, TimeLimitSelector, GoToIntro, StartGame>,
             new ButtonGroup<Unpause,Quit>,

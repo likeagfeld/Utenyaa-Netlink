@@ -74,6 +74,12 @@ typedef struct {
     /* Title-screen cursor state (preserves position when returning from
      * connecting / lobby / gameplay so ONLINE stays highlighted). */
     uint8_t titleScreenChoice;
+
+    /* Phase C — when set true at title-screen entry, the connecting
+     * flow will transition to UGAME_STATE_DOWNLOAD_CHARS instead of
+     * UGAME_STATE_LOBBY after auth. cc_download.c clears it before
+     * fresh-boot return so a subsequent ONLINE entry works normally. */
+    bool    downloadCharsMode;
 } utenyaa_game_t;
 
 /*============================================================================

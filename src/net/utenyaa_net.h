@@ -243,6 +243,43 @@ typedef struct {
     unet_leaderboard_entry_t leaderboard[UNET_LEADERBOARD_MAX];
     int leaderboard_count;
 
+    /* Phase C — custom character listing/download state. Populated
+     * by the CC_LIST_RESP / CC_DONE / CC_BEGIN / CC_CHUNK / CC_END
+     * dispatcher. Polled by cc_download.c per-frame state machine. */
+    uint8_t  cc_list_count;
+    bool     cc_list_done;
+    /* Per-list-entry metadata (slug + display name). Sized by the
+     * UNET_CC_MAX cap. We only store enough to display + key the
+     * subsequent download_req — the actual sprite bytes go to the
+     * cc_dl_buf below as each character streams in. */
+    struct {
+        char slug[UNET_CC_LIST_ITEM_SLUG_LEN + 1];
+        char name[UNET_CC_LIST_ITEM_NAME_LEN + 1];
+    } cc_list[UNET_CC_MAX];
+
+    /* In-flight per-character download. cc_dl_idx == 0xFF when no
+     * stream is active. cc_dl_received_bytes / cc_dl_total are the
+     * progress-bar source. cc_dl_complete latches to true when a
+     * character finishes; cc_download.c takes that as its cue to
+     * advance to the next char. */
+    uint8_t  cc_dl_idx;
+    uint16_t cc_dl_total;
+    uint8_t  cc_dl_num_chunks;
+    uint16_t cc_dl_expected_crc;
+    uint16_t cc_dl_received_bytes;
+    bool     cc_dl_active;
+    bool     cc_dl_complete;
+    uint8_t  cc_dl_chunks_seen[(UNET_CC_PAYLOAD_BYTES / UNET_CC_CHUNK_DATA_MAX + 1 + 7) / 8];
+    /* The per-character payload buffer. We don't malloc it — keep
+     * static so we can run on a busy heap without fragmentation
+     * pressure during the download flow. UNET_CC_PAYLOAD_BYTES =
+     * 2648; total static cost = 2648 bytes (fits comfortably). */
+    uint8_t  cc_dl_buf[UNET_CC_PAYLOAD_BYTES];
+
+    /* Aggregate download progress: how many characters we've
+     * successfully completed across the whole batch. */
+    uint8_t  cc_completed_count;
+
     /* === Diagnostic counters (instrumentation, not protocol state) ===
      * Populated by unet_tick / unet_rx_poll. Read by online screens to
      * render a debug strip so we can see hard byte/frame numbers
@@ -356,6 +393,21 @@ void unet_send_dbg_log(const char* text);
  * toggle that flips the player back to NOT ready). */
 void unet_reset_ready_state(void);
 void unet_request_leaderboard(void);
+
+/* Phase C — Custom character downloads. The Saturn-side state
+ * machine is in cc_download.c; these are the protocol-level
+ * primitives it uses. */
+void unet_send_cc_list_req(void);
+void unet_send_cc_download_req(uint8_t idx);
+void unet_cc_reset_state(void);
+/* Reset just the per-character receiver state (called between
+ * downloads to clear chunk-seen mask + buffer). */
+void unet_cc_reset_dl_slot(void);
+/* Consume the cc_dl_complete latch — caller has snapshotted the
+ * payload and is ready for the next download. */
+void unet_cc_consume_complete(void);
+/* CRC-16/CCITT-FALSE matching the server's crc16_ccitt_false. */
+uint16_t unet_cc_crc16(const uint8_t* data, int len);
 void unet_log(const char* msg);
 void unet_clear_log(void);
 
