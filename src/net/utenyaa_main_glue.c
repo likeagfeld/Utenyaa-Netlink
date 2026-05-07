@@ -175,6 +175,14 @@ void unet_glue_enter_char_download(void)
     g_Game.gameState = UGAME_STATE_CONNECTING;
     /* Reset CC state so a prior aborted run doesn't leak state. */
     unet_cc_reset_state();
+    /* Run the same per-entry init the Play-Online path runs through
+     * name_entry.c. Without this, the connecting state machine never
+     * gets unet_init()'d, never receives the modem-availability flag
+     * via unet_set_modem_available(), and never sets the username.
+     * Symptom (operator-reported): the Download-Characters dial does
+     * not detect a modem even though Play-Online dialing on the same
+     * boot cycle works. */
+    connecting_init();
 }
 
 /*============================================================================

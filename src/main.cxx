@@ -150,6 +150,18 @@ int main()
 	{
 		jo_fixed_point_time();
 
+		// Set up the SGL camera matrix BEFORE the network tick. The
+		// online lobby's character-preview sprite draw uses
+		// jo_sprite_draw3D which internally calls slDispSprite — that
+		// requires a valid camera/look-at matrix from the current frame.
+		// Without this call the lobby preview projects to undefined
+		// coordinates and the sprite never appears (operator-reported:
+		// "not seeing a sprite preview of character of select"). The
+		// gameplay path further down also calls jo_3d_camera_look_at,
+		// so this is just a one-frame-earlier setup that has no effect
+		// on the gameplay matrix.
+		jo_3d_camera_look_at(&camera);
+
 		// Online screens (name entry / connecting / lobby) short-circuit
 		// the offline menu and world. Keep the network state machine
 		// ticking every frame regardless.

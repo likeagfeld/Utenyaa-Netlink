@@ -513,11 +513,27 @@ void lobby_draw(void)
 
     /* Character sprite preview for the LOCAL player. Draws the
      * "south" frame (frame 0) of whichever character_id the server
-     * has assigned/confirmed for our pid. Position is upper-right
-     * area of the screen so it doesn't collide with the roster
-     * text rows. Only one VDP1 sprite drawn per frame to keep
-     * cmd-table pressure low and avoid the lobby-sprite jo_free
-     * issues that motivated the prior simplified-mode removal. */
+     * has assigned/confirmed for our pid.
+     *
+     * Two operator-reported regressions fixed here:
+     *
+     *  (a) The previous "YOU" label used `font_draw_centered("YOU",
+     *      30, 500)` — but font_draw_centered's y arg is in PIXEL
+     *      coords; px_to_row(30) = (30+112)/8 = 17. That landed the
+     *      "YOU" string on row 17, smack in the middle of the
+     *      "PRESS START WHEN READY" line, producing the operator-
+     *      reported visual corruption "PRESS STARYOUHEN READY".
+     *      Use font_draw with FONT_X/FONT_Y so the row is explicit.
+     *
+     *  (b) jo_sprite_draw3D uses slDispSprite which is 3D-projected,
+     *      requiring a valid SGL camera matrix. The online-screen
+     *      branch in main.cxx short-circuits the gameplay world-
+     *      render path (which is what normally calls
+     *      jo_3d_camera_look_at) — so the matrix was stale and the
+     *      sprite projected to undefined / off-screen coords.
+     *      Fixed by adding a one-line jo_3d_camera_look_at(&camera)
+     *      at the top of the per-frame loop in main.cxx so the
+     *      matrix is current before any online-screen sprite call. */
     {
         uint8_t my_char = 0xFF;
         for (int k = 0; k < nd->lobby_count; k++) {
@@ -529,18 +545,27 @@ void lobby_draw(void)
         if (my_char != 0xFF
             && my_char < (uint8_t)unet_glue_num_characters()) {
             int sprite_id = unet_glue_character_sprite_for(my_char);
-            /* "south" frame is index 0 within the per-character
-             * 5-frame block — that's the front-facing portrait
-             * the operator wants to see while picking. */
             if (sprite_id >= 0) {
-                /* Upper-right preview at (240, -68), z=500 to match
-                 * the font plane priority. Y is negative because
-                 * jo_sprite_draw3D uses centered-coordinates with
-                 * the screen origin at the middle. */
-                jo_sprite_draw3D(sprite_id, 110, -75, 500);
+                /* Position in screen-centered coords (origin at TV
+                 * middle). x=110 = right side, y=-72 = upper area
+                 * (negative Y is up in SGL screen space). z=500
+                 * matches the font plane depth. */
+                jo_sprite_draw3D(sprite_id, 110, -72, 500);
             }
+            /* Numeric character index hint so the operator gets
+             * unambiguous L/R feedback even when two characters
+             * happen to share a similar built-in pose. */
+            font_printf(FONT_X(31), FONT_Y(3), 500, "CHAR %d", (int)my_char);
+        } else {
+            /* Pad the label area when no preview is drawable so a
+             * previous frame's CHAR-N label doesn't linger. */
+            font_draw("       ", FONT_X(31), FONT_Y(3), 500);
         }
-        font_draw_centered("YOU", 30, 500);   /* tiny label above preview */
+        /* "YOU" label above the preview — col 32 puts it near the
+         * sprite (sprite x=110 in centered coords ≈ pixel col 33).
+         * Row 2 is above the player-list header (row 6) and clear of
+         * the "UTENYAA LOBBY" centered title (cols ~13-26). */
+        font_draw("YOU", FONT_X(32), FONT_Y(2), 500);
     }
 
     /* Disconnect-confirmation overlay removed in simplified mode —

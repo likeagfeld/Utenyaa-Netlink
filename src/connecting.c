@@ -223,20 +223,31 @@ void connecting_draw(void)
 
     if (g_Game.gameState != UGAME_STATE_CONNECTING) return;
 
-    /* jo_printf output persists on NBG0 frame-to-frame; clear first
-     * so lines that changed don't leave stale tails behind. */
-    jo_clear_screen();
+    /* Do NOT call jo_clear_screen() here. With JO_FRAMERATE=2 (the 0.8
+     * VDP1 fillrate fix), per-frame clear-then-redraw flashes visibly
+     * — operator-reported "DIALING title at top is flickering text".
+     * The one-shot clear in connecting_init() handles entry; from then
+     * on, all per-frame text we write is either fixed (rewriting the
+     * same bytes is invisible) or padded to a fixed width so a shorter
+     * status message overwrites the tail of a longer one in place. */
 
     font_draw_centered("CONNECTING", FONT_Y(8), 500);
-    /* Pad status to 25 chars so shorter messages ("CONNECTED!") don't
-     * leave trailing characters from longer ones ("INITIALIZING MODEM..."). */
+    /* Pad status to a fixed 30-col span centered on column 20 (= screen
+     * center). Hand-build it so the centered column is constant regardless
+     * of the actual text length — a length-shrinking message would
+     * otherwise re-center toward the middle and leave the tail of the
+     * longer prior message uncovered. */
     {
-        char padded[32];
-        int n = 0;
-        while (g_connect_msg[n] && n < 25) { padded[n] = g_connect_msg[n]; n++; }
-        while (n < 25) { padded[n++] = ' '; }
-        padded[n] = '\0';
-        font_draw_centered(padded, FONT_Y(14), 500);
+        char fixed_row[41];
+        int n;
+        for (n = 0; n < 40; n++) fixed_row[n] = ' ';
+        fixed_row[40] = '\0';
+        int len = 0;
+        while (g_connect_msg[len] && len < 30) len++;
+        int start = 20 - len / 2;   /* same centering math font_draw_centered uses */
+        if (start < 0) start = 0;
+        for (n = 0; n < len; n++) fixed_row[start + n] = g_connect_msg[n];
+        font_draw(fixed_row, FONT_X(0), FONT_Y(14), 500);
     }
 
     nd = unet_get_data();
