@@ -751,6 +751,84 @@ class Crate:
         self.respawn_timer = 0.0  # seconds until respawn when inactive
 
 
+def _parse_ute_static_models(data: bytes):
+    """Extract Model-type entities from a .UTE map blob and return a
+    list of (world_x, world_y, model_id) integer tuples in WORLD
+    coordinates. Used by the lag-comp bullet check to block shots at
+    placed obstacles like BOMB.NYA / WALL.NYA / TREE.NYA.
+
+    Layout (matches src/Objects/Map.hpp::LevelData with packed Tile):
+      offset 0      4    Identifier "UTE" + version
+      offset 4      1600 Tile[400]   (4 bytes packed each)
+      offset 1604   16   Light Sun   (Vec3=12, color=2, dummy=2)
+      offset 1620   3200 GouraudColor[400]   (jo_color[4] = 8 bytes each)
+      offset 4820   4800 Vec3 Normals[400]   (12 bytes each)
+      offset 9620   4    EntityCount (size_t LE on SH-2 BE — actually
+                         the Saturn writes this as a native u32 in
+                         LITTLE-ENDIAN order because Map.hpp uses
+                         direct struct read on a memcpy'd file).
+                         WAIT — Saturn is big-endian; struct write
+                         goes BE. Need to test both orderings; pick
+                         the one that yields a sensible count.
+      offset 9624   N×28 EntityDefinition[]  (each: int Type=4,
+                         u16 TileX=2, u16 TileY=2, Fxp Direction=4,
+                         u8 Dummy[16]=16 → 28 bytes total)
+
+    World position from tile coords (matches Map.hpp:493):
+      world_x = (TileX + 0.5) × 8     i.e. integer  TileX*8 + 4
+      world_y = (TileY + 0.5) × 8
+    """
+    HEADER_FIXED = 4 + 1600 + 16 + 3200 + 4800   # 9620
+    if len(data) < HEADER_FIXED + 4:
+        return []
+    # Saturn SH-2 is big-endian; struct fields written via memcpy are
+    # already in BE byte order in the file.
+    entity_count = int.from_bytes(data[HEADER_FIXED:HEADER_FIXED+4], "big")
+    # Sanity check — guard against parse-format misalignment. The
+    # remaining file space must hold exactly entity_count × 28 bytes
+    # (or close to it; trailing padding is fine).
+    expected = HEADER_FIXED + 4 + entity_count * 28
+    if entity_count > 256 or expected > len(data) + 32:
+        # Re-try as little-endian; some toolchains may write u32 LE.
+        entity_count_le = int.from_bytes(data[HEADER_FIXED:HEADER_FIXED+4], "little")
+        expected_le = HEADER_FIXED + 4 + entity_count_le * 28
+        if entity_count_le <= 256 and expected_le <= len(data) + 32:
+            entity_count = entity_count_le
+        else:
+            return []   # neither byte order makes sense; bail
+    out = []
+    off = HEADER_FIXED + 4
+    ENTITY_TYPE_MODEL = 2   # Map.hpp::EntityType::Model
+    for _ in range(entity_count):
+        if off + 28 > len(data):
+            break
+        # Try BE first; if Type is out of range, fall back to LE.
+        type_be = int.from_bytes(data[off:off+4], "big")
+        type_le = int.from_bytes(data[off:off+4], "little")
+        if 0 <= type_be <= 3:
+            ent_type = type_be
+            tile_x = int.from_bytes(data[off+4:off+6], "big")
+            tile_y = int.from_bytes(data[off+6:off+8], "big")
+        elif 0 <= type_le <= 3:
+            ent_type = type_le
+            tile_x = int.from_bytes(data[off+4:off+6], "little")
+            tile_y = int.from_bytes(data[off+6:off+8], "little")
+        else:
+            off += 28
+            continue
+        if ent_type == ENTITY_TYPE_MODEL:
+            # Model index lives at Dummy[0], i.e. offset +12 within
+            # the 28-byte EntityDefinition record (Map.hpp:498 reads
+            # entityPtr->Dummy[0] into Reserved[1] of the runtime
+            # EntityCreationDefinition).
+            model_id = data[off+12] if off+12 < len(data) else 0
+            world_x = tile_x * 8 + 4
+            world_y = tile_y * 8 + 4
+            out.append((world_x, world_y, model_id))
+        off += 28
+    return out
+
+
 class MatchState:
     def __init__(self, stage_id: int, match_seconds: int, seed: int,
                  streamed: bool = False, stream_chunks: int = 0):
@@ -1837,6 +1915,21 @@ class UtenyaaServer:
                                 stream_chunks=stream_chunks)
         self.match.crates = [Crate(x["slot"], x["flags"], x["x"], x["y"], x["z"])
                              for x in build_crate_roster(ms_stage)]
+        # Parse static-Model entities (BOMB.NYA, walls, trees, etc.)
+        # out of the streamed .UTE bytes so the lag-comp bullet check
+        # can block bullet paths against them. Operator-reported:
+        # "bullet damages player on opposite side of the bomb at
+        # center of Dansfield map" — the bomb is a Model entity, not
+        # a Crate, and was previously not in any obstacle list.
+        self.match.static_obstacles = []
+        if live_bytes is not None:
+            try:
+                self.match.static_obstacles = _parse_ute_static_models(live_bytes)
+                log.info("Parsed %d static-Model obstacles from live map",
+                         len(self.match.static_obstacles))
+            except Exception as e:
+                log.warning("UTE static-model parse failed: %s", e)
+                self.match.static_obstacles = []
 
         # Assign game PIDs 0..N-1. Humans first, then bots.
         next_pid = 0
@@ -1922,6 +2015,9 @@ class UtenyaaServer:
         # lobby_players which has synthetic P2 ids.
         char_roster = [(pid, p.character_id)
                        for pid, p in self.game_players.items()]
+        log.info("GAME_START char_roster: %s",
+                 [(pid, p.character_id, p.name)
+                  for pid, p in self.game_players.items()])
         for cc in self.clients.values():
             if not cc.authenticated or not cc.in_game:
                 continue
@@ -2082,24 +2178,23 @@ class UtenyaaServer:
         if not rewound:
             return False
 
-        # Pre-fetch active crate positions. Crates physically block
-        # bullets in the client sim — the bullet collides with the
-        # crate model and triggers an explosion (or just stops).
-        # Without server-side awareness of crates, the lag-comp path
-        # walked straight THROUGH a crate sitting between two players
-        # and registered an immediate hit on the player on the far
-        # side. Operator-reported on Dansfield: "I fire at the bomb
-        # in the center, the bullet hasn't even reached the bomb yet
-        # and the opposite player takes damage." Treat each active
-        # crate as a blocker with the same world-unit radius as the
-        # cone_radius used for player hits, so the path-walk aborts
-        # the hit on the FIRST crate or player encountered (whichever
-        # is closer along the path), matching client-side visuals.
-        crate_blockers = []
+        # Bullet-path obstacle list. The user reported "bullet damages
+        # opposite player through bomb at center bottom of Dansfield"
+        # — the "bomb" turned out to be a placed BOMB.NYA Model entity
+        # (Map.hpp EntityType::Model), NOT a Crate. Both need to act
+        # as blockers because both have client-side AABB colliders.
+        #
+        # Sources, lowest first along the path-walk:
+        #   1. Active crates (server already tracks these).
+        #   2. Static-Model entities parsed from the streamed .UTE.
+        # Both append (world_x, world_y) integer pairs.
+        obstacles = []
         if self.match is not None:
             for crate in self.match.crates:
                 if not crate.active: continue
-                crate_blockers.append((crate.x >> 16, crate.y >> 16))
+                obstacles.append((crate.x >> 16, crate.y >> 16, "crate"))
+            for mx, my, model_id in getattr(self.match, "static_obstacles", []):
+                obstacles.append((mx, my, "model%d" % model_id))
 
         # Bullet position in fxp 16.16; advance by `step_units` world
         # units per iteration. dx,dy are fxp 16.16 with magnitude
@@ -2121,15 +2216,23 @@ class UtenyaaServer:
             # the client's local bullet-vs-crate sim plus the server's
             # crate_destroy / crate_spawn broadcast pair on pickup.
             blocked = False
-            for cx, cy in crate_blockers:
+            blocked_kind = None
+            blocked_pos = None
+            for cx, cy, kind in obstacles:
                 ddx = cx - bx_w
                 ddy = cy - by_w
                 if ddx * dx + ddy * dy < 0:
                     continue
                 if ddx * ddx + ddy * ddy <= hit_r_sq:
                     blocked = True
+                    blocked_kind = kind
+                    blocked_pos = (cx, cy)
                     break
             if blocked:
+                log.info("LAG-COMP OBSTACLE-BLOCK: shooter=%d step=%d kind=%s "
+                         "obstacle@(%d,%d), no player damage applied",
+                         shooter_pid, i, blocked_kind,
+                         blocked_pos[0], blocked_pos[1])
                 return False
             for pid, p, tx_w, ty_w in rewound:
                 ddx = tx_w - bx_w
@@ -2572,7 +2675,12 @@ class UtenyaaServer:
             shooter_pid = payload[1]
             # Validate that shooter_pid is one of THIS client's local
             # co-op pids — refuse to spoof someone else's bullet.
-            if shooter_pid not in c.local_pids: return
+            if shooter_pid not in c.local_pids:
+                log.info("FIRE_BULLET_P2 from %s REJECTED: shooter_pid=%d not in local_pids=%s",
+                         c.username, shooter_pid, c.local_pids)
+                return
+            log.info("FIRE_BULLET_P2 from %s shooter_pid=%d (local_pids=%s)",
+                     c.username, shooter_pid, c.local_pids)
             x, y, z, dx, dy, dz = struct.unpack("!iiiiii", payload[2:26])
             eid = self.match.alloc_entity_id()
             self._broadcast(build_bullet_spawn(eid, shooter_pid, x, y, z, dx, dy, dz))
@@ -2721,6 +2829,10 @@ class UtenyaaServer:
                 if not hasattr(c, "local_characters"):
                     c.local_characters = []
                 c.local_characters.append(p2_assigned)
+                log.info("ADD_LOCAL_PLAYER from %s — P2 slot %d, char=%d, "
+                         "current local_characters=%s",
+                         c.username, len(c.local_names) - 1,
+                         p2_assigned, c.local_characters)
                 # pid assigned at match start
                 c.send_raw(build_local_player_ack(0xFF))
                 self._broadcast_lobby()

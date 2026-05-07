@@ -164,6 +164,19 @@ namespace Entities
 						(uint8_t)this->controller != g_Game.myPlayerID;
 					if (isP2)
 					{
+						/* Emit a once-per-match diagnostic line so the
+						 * server journal can confirm Saturn took the
+						 * P2-shooter code path. Static suppresses
+						 * repeat-spam — shoots a lot per match. */
+						static bool s_logged_p2_fire = false;
+						if (!s_logged_p2_fire) {
+							s_logged_p2_fire = true;
+							char buf[64];
+							snprintf(buf, sizeof(buf),
+								"SHOOT_DBG P2 fire pid=%u",
+								(unsigned)this->controller);
+							unet_send_dbg_log(buf);
+						}
 						unet_send_fire_bullet_p2(
 							(uint8_t)this->controller,
 							this->position.x.Value(), this->position.y.Value(), this->position.z.Value(),
@@ -171,6 +184,15 @@ namespace Entities
 					}
 					else
 					{
+						static bool s_logged_p1_fire = false;
+						if (!s_logged_p1_fire) {
+							s_logged_p1_fire = true;
+							char buf[64];
+							snprintf(buf, sizeof(buf),
+								"SHOOT_DBG P1 fire pid=%u",
+								(unsigned)this->controller);
+							unet_send_dbg_log(buf);
+						}
 						unet_send_fire_bullet(
 							this->position.x.Value(), this->position.y.Value(), this->position.z.Value(),
 							movementDir.x.Value(), movementDir.y.Value(), movementDir.z.Value());

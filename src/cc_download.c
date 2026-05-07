@@ -180,6 +180,16 @@ static void ccd_request_next(void)
     s_dl_request_timer = 0;
 }
 
+/* Diagnostic helper — emits a CC_DBG line to the server journal so
+ * the next test session's journalctl produces a clean state-transition
+ * trail without needing per-chunk noise. Format:
+ *   CC_DBG <state-tag> [extra]
+ * where state-tag is one of INIT/AUTH/LIST/DL_BEGIN/DL_END/DONE/FAILED. */
+static void ccd_log(const char* msg)
+{
+    unet_send_dbg_log(msg);
+}
+
 void cc_download_init(void)
 {
     int i;
@@ -224,6 +234,7 @@ void cc_download_init(void)
      * Wait for unet_get_state() == UNET_STATE_LOBBY (set on WELCOME
      * receipt) before sending. */
     s_state = CCD_WAITING_AUTH;
+    ccd_log("CC_DBG init -> WAITING_AUTH");
     jo_clear_screen();
 }
 
@@ -243,12 +254,16 @@ void cc_download_tick(void)
         if (st == UNET_STATE_LOBBY ||
             st == UNET_STATE_PLAYING)
         {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "CC_DBG auth-ok t=%d -> WAITING_LIST", s_list_wait_timer);
+            ccd_log(buf);
             ccd_send_list_req();
             s_state = CCD_WAITING_LIST;
             s_list_wait_timer = 0;
         } else if (s_list_wait_timer > CCD_AUTH_TIMEOUT_FRAMES) {
             /* Auth never completed — surface as FAILED so operator
              * gets a recognizable error path back to title. */
+            ccd_log("CC_DBG auth-timeout -> FAILED");
             s_state = CCD_FAILED;
         }
         break;
@@ -258,14 +273,20 @@ void cc_download_tick(void)
         const unet_state_data_t* nd = unet_get_data();
         s_list_wait_timer++;
         if (nd->cc_list_done) {
+            char buf[64];
+            snprintf(buf, sizeof(buf),
+                     "CC_DBG list-done count=%u t=%d", (unsigned)nd->cc_list_count, s_list_wait_timer);
+            ccd_log(buf);
             s_dl_idx = 0;
             if (nd->cc_list_count == 0) {
+                ccd_log("CC_DBG no-chars -> DONE");
                 s_state = CCD_DONE;   /* server has none to share */
             } else {
                 s_state = CCD_DOWNLOADING;
                 ccd_request_next();
             }
         } else if (s_list_wait_timer > CCD_LIST_TIMEOUT_FRAMES) {
+            ccd_log("CC_DBG list-timeout -> FAILED");
             s_state = CCD_FAILED;
         }
         break;
@@ -274,7 +295,24 @@ void cc_download_tick(void)
     case CCD_DOWNLOADING: {
         const unet_state_data_t* nd = unet_get_data();
         s_dl_request_timer++;
+        /* Periodic progress log at 1Hz so we can see chunk delivery
+         * pacing without spamming every frame. */
+        if ((s_dl_request_timer % 60) == 0) {
+            char buf[80];
+            snprintf(buf, sizeof(buf),
+                     "CC_DBG DL idx=%d t=%d rx=%u/%u active=%d",
+                     s_dl_idx, s_dl_request_timer,
+                     (unsigned)nd->cc_dl_received_bytes,
+                     (unsigned)nd->cc_dl_total,
+                     nd->cc_dl_active ? 1 : 0);
+            ccd_log(buf);
+        }
         if (nd->cc_dl_complete && nd->cc_dl_idx == (uint8_t)s_dl_idx) {
+            char buf[80];
+            snprintf(buf, sizeof(buf),
+                     "CC_DBG DL complete idx=%d sz=%u",
+                     s_dl_idx, (unsigned)nd->cc_dl_total);
+            ccd_log(buf);
             /* Snapshot this character's payload into our pool. */
             int sz = (int)nd->cc_dl_total;
             if (sz > 0 && sz <= (int)sizeof(s_payloads[0])
@@ -291,10 +329,20 @@ void cc_download_tick(void)
             /* If ccd_request_next saw end-of-list, it transitioned
              * us to CCD_DONE — register VDP1 sprites now while we're
              * still on the download screen (idle frame budget). */
-            if (s_state == CCD_DONE) ccd_register_sprites();
+            if (s_state == CCD_DONE) {
+                ccd_log("CC_DBG all-DL-done -> DONE registering sprites");
+                ccd_register_sprites();
+            }
         } else if (s_dl_request_timer > CCD_DL_TIMEOUT_FRAMES) {
             /* Timeout — give up on this character, advance. If too
              * many fail, the user will see a reduced count at DONE. */
+            char buf[64];
+            snprintf(buf, sizeof(buf),
+                     "CC_DBG DL timeout idx=%d rx=%u/%u",
+                     s_dl_idx,
+                     (unsigned)nd->cc_dl_received_bytes,
+                     (unsigned)nd->cc_dl_total);
+            ccd_log(buf);
             s_dl_idx++;
             ccd_request_next();
             if (s_state == CCD_DONE) ccd_register_sprites();
@@ -302,6 +350,7 @@ void cc_download_tick(void)
                    && (s_dl_request_timer % CCD_REREQUEST_FRAMES) == 0
                    && !nd->cc_dl_active) {
             /* Re-send the download request if we got nothing back yet. */
+            ccd_log("CC_DBG re-request DL — no chunks received");
             unet_send_cc_download_req((uint8_t)s_dl_idx);
         }
         break;
@@ -320,6 +369,16 @@ void cc_download_input(void)
     if ((s_state == CCD_DONE || s_state == CCD_FAILED)
         && a_now && !s_a_held_prev)
     {
+        /* Diagnostic: confirm A-press was actually detected as a
+         * rising edge on the DONE/FAILED screen. Operator-reported
+         * "pressing A to return to title does nothing" — if this
+         * line lands in the journal but the title-screen never
+         * appears, the bug is downstream of the disconnect. If
+         * this line never lands, the rising-edge gate is being
+         * defeated by held-A from menu entry. */
+        ccd_log(s_state == CCD_DONE
+                ? "CC_DBG A-press at DONE -> title"
+                : "CC_DBG A-press at FAILED -> title");
         /* Disconnect cleanly + fresh boot back to title. Mirrors
          * the lobby Y-disconnect path (lobby.c:186) so the modem
          * + UART get torn down identically. */
