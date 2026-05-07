@@ -35,7 +35,8 @@ typedef enum {
     UGAME_STATE_LOBBY,             /* In lobby (char select, stage vote, ready) */
     UGAME_STATE_MAP_PICK,          /* Player pressed START — picking map from list */
     UGAME_STATE_GAMEPLAY,          /* In match */
-    UGAME_STATE_GAME_OVER          /* Results screen, then back to lobby */
+    UGAME_STATE_GAME_OVER,         /* Results screen, then back to lobby */
+    UGAME_STATE_DOWNLOAD_CHARS     /* Phase C: dial → list custom chars → back */
 } utenyaa_gamestate_t;
 
 typedef struct {

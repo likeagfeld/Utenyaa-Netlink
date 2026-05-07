@@ -166,6 +166,32 @@ static inline int16_t unet_d_angle(uint8_t q) { return (int16_t)(((uint16_t)q) <
 #define UNET_STAGE_STREAMED        0xFE  /* sentinel stage_id meaning "use streamed buffer" */
 
 /*============================================================================
+ * Phase B/C — Custom character distribution (mirror userver.py 0xC0..0xC6)
+ * Title-screen "Download Custom Characters" flow streams user-authored
+ * characters from the editor server into Saturn-local storage.
+ *============================================================================*/
+
+#define UNET_CC_LIST_REQ           0xC0  /* Saturn → server: enumerate */
+#define UNET_CC_LIST_RESP          0xC1  /* server → Saturn: 1 list entry [idx:1, slug:16 null-pad, name:24 null-pad] */
+#define UNET_CC_DOWNLOAD_REQ       0xC2  /* Saturn → server: stream char N [idx:1] */
+#define UNET_CC_BEGIN              0xC3  /* server → Saturn: stream header [idx:1, total_size:2BE, num_chunks:1, crc:2BE] */
+#define UNET_CC_CHUNK              0xC4  /* server → Saturn: chunk [idx:1, chunk_idx:1, dlen:1, data:dlen] */
+#define UNET_CC_END                0xC5  /* server → Saturn: stream done [idx:1] */
+#define UNET_CC_DONE               0xC6  /* server → Saturn: list enumeration complete */
+#define UNET_CC_LIST_ITEM_NAME_LEN 24
+#define UNET_CC_LIST_ITEM_SLUG_LEN 16
+#define UNET_CC_CHUNK_DATA_MAX    120
+#define UNET_CC_MAX                64    /* cap on # of custom chars (matches server) */
+#define UNET_CC_FRAMES              5    /* 5 frames per character */
+#define UNET_CC_W                  16
+#define UNET_CC_H                  16
+#define UNET_CC_FRAME_BYTES       (UNET_CC_W * UNET_CC_H * 2)
+/* Per-character payload sent over CC_BEGIN/CHUNK/END:
+ *   88-byte header (32 name + 32 creator + 16 slug + 2 reserved
+ *                   + 2 n_frames + 2 W + 2 H) + 5 × 512 = 2648 bytes. */
+#define UNET_CC_PAYLOAD_BYTES   (88 + UNET_CC_FRAMES * UNET_CC_FRAME_BYTES)
+
+/*============================================================================
  * Input Bitmask (fits in 1 byte)
  * Utenyaa controls: D-pad moves tank, A=shoot, B=drop mine, C=throw bomb,
  * START=pause. Shoulder triggers repurposed in lobby for char cycle.
