@@ -482,7 +482,19 @@ void lobby_draw(void)
      * "P2:" line, no vote tally — these were all writing strings
      * containing 'P2: ' / '2: ' bytes that recurred as the literal
      * value of the recurring jo_free 'Bad pointer 0x..323A20' crash. */
-    font_draw("#  NAME             CHAR  STATUS", FONT_X(1), FONT_Y(6), 500);
+    /* Roster layout — text columns + a small per-row character sprite
+     * aligned with each row. Operator-reported: "names and player
+     * sprites in the lobby are not horizontally aligned... the player
+     * sprites are also overlapping some column header text." Older
+     * layout had two big 16-px sprites stacked at upper-right; their
+     * Y range overlapped row 6 (the column header). Per-row small
+     * sprites at half-scale (8 px tall) fit exactly inside one
+     * 8-pixel text row, so each row's sprite is on the same line
+     * as that row's name. Header column "SPR" is just padding
+     * preserving the text layout — the actual sprite is drawn over
+     * the text plane with VDP1 priority. Roster rows shrink the
+     * status width so the sprite has clearance at the right. */
+    font_draw("#  NAME             CHAR STATUS  SPR ", FONT_X(1), FONT_Y(6), 500);
     for (i = 0; i < UNET_MAX_LOBBY; i++) {
         if (i < nd->lobby_count && nd->lobby_players[i].active) {
             const unet_lobby_player_t* lp = &nd->lobby_players[i];
@@ -498,14 +510,42 @@ void lobby_draw(void)
             else
                 snprintf(char_buf, sizeof(char_buf), "%2u", (unsigned)lp->character_id);
             font_printf(FONT_X(1), FONT_Y(7 + i), 500,
-                        "%c%-2d %-16s %2s   %s",
+                        "%c%-2d %-16s %2s   %-5s     ",
                         marker, i + 1, lp->name, char_buf,
-                        lp->ready ? "READY" : "     ");
+                        lp->ready ? "READY" : "");
+            /* Per-row character sprite. Half-scale (0.5×) shrinks the
+             * native 16×16 to 8×8 — exactly one 8-pixel text row tall,
+             * so it sits cleanly aligned with the name on the same
+             * line. Centered at column ~35 (SPR header column).
+             * jo_sprite_draw3D uses center-screen coordinates: x is
+             * pixel-x relative to TV centre, y is pixel-y. Our row
+             * center is at FONT_Y(7+i) + 4 (mid of the 8-px row).
+             *
+             * Rendering uses unet_glue_character_sprite_for which
+             * already handles built-in vs custom (cc_download lookup
+             * + fallback) — same path as the in-game tank, so the
+             * lobby roster matches what the player will see. */
+            if (lp->character_id != 0xFF
+                && lp->character_id < (uint8_t)unet_glue_num_characters()) {
+                int sprite_id = unet_glue_character_sprite_for(lp->character_id);
+                if (sprite_id >= 0) {
+                    /* Column 35 in pixel-x, centered:
+                     *   FONT_X(35) = -160 + 35*8 = 120.
+                     * Add +4 for the cell center (cell origin is
+                     * left edge). y center = FONT_Y(7+i) + 4. */
+                    int sx = -160 + 35 * 8 + 4;
+                    int sy = -112 + (7 + i) * 8 + 4;
+                    jo_sprite_change_sprite_scale(0.5f);
+                    jo_sprite_draw3D(sprite_id, sx, sy, 500);
+                    jo_sprite_restore_sprite_scale();
+                }
+            }
         } else {
             /* Pad vacated slot with spaces so a previously-occupied
              * row doesn't show stale data after a player leaves
-             * (no per-frame jo_clear_screen anymore). */
-            font_draw("                            ",
+             * (no per-frame jo_clear_screen anymore). Width matches
+             * the new active-row format including the SPR column. */
+            font_draw("                                       ",
                       FONT_X(1), FONT_Y(7 + i), 500);
         }
     }
@@ -542,84 +582,15 @@ void lobby_draw(void)
     font_draw("HOLD Z FOR LEADERBOARD",
               FONT_X(1), FONT_Y(26), 500);
 
-    /* Character sprite preview for the LOCAL player. Draws the
-     * "south" frame (frame 0) of whichever character_id the server
-     * has assigned/confirmed for our pid.
-     *
-     * Two operator-reported regressions fixed here:
-     *
-     *  (a) The previous "YOU" label used `font_draw_centered("YOU",
-     *      30, 500)` — but font_draw_centered's y arg is in PIXEL
-     *      coords; px_to_row(30) = (30+112)/8 = 17. That landed the
-     *      "YOU" string on row 17, smack in the middle of the
-     *      "PRESS START WHEN READY" line, producing the operator-
-     *      reported visual corruption "PRESS STARYOUHEN READY".
-     *      Use font_draw with FONT_X/FONT_Y so the row is explicit.
-     *
-     *  (b) jo_sprite_draw3D uses slDispSprite which is 3D-projected,
-     *      requiring a valid SGL camera matrix. The online-screen
-     *      branch in main.cxx short-circuits the gameplay world-
-     *      render path (which is what normally calls
-     *      jo_3d_camera_look_at) — so the matrix was stale and the
-     *      sprite projected to undefined / off-screen coords.
-     *      Fixed by adding a one-line jo_3d_camera_look_at(&camera)
-     *      at the top of the per-frame loop in main.cxx so the
-     *      matrix is current before any online-screen sprite call. */
-    {
-        uint8_t my_char = 0xFF;
-        uint8_t my_char2 = 0xFF;
-        for (int k = 0; k < nd->lobby_count; k++) {
-            if (nd->lobby_players[k].id == nd->my_user_id) {
-                my_char = nd->lobby_players[k].character_id;
-            }
-            /* Lobby state for P2 is tagged with a synthetic id
-             * (100 + uid*4 + j). The Saturn knows its own uid via
-             * my_player_id (P1). Match P2's row by id-range +
-             * by being labeled with our P2 name. We don't need to
-             * be precise — pull the FIRST entry in the synthetic
-             * range that's not us. */
-            if (g_Game.hasSecondLocal &&
-                nd->lobby_players[k].id != nd->my_user_id &&
-                nd->lobby_players[k].id >= 100 &&
-                my_char2 == 0xFF)
-            {
-                my_char2 = nd->lobby_players[k].character_id;
-            }
-        }
-        /* P1 preview (right side, upper) */
-        if (my_char != 0xFF
-            && my_char < (uint8_t)unet_glue_num_characters()) {
-            int sprite_id = unet_glue_character_sprite_for(my_char);
-            if (sprite_id >= 0) {
-                jo_sprite_draw3D(sprite_id, 110, -72, 500);
-            }
-            font_printf(FONT_X(31), FONT_Y(3), 500, "P1 C%d", (int)my_char);
-        } else {
-            font_draw("        ", FONT_X(31), FONT_Y(3), 500);
-        }
-        /* P2 preview (right side, just below P1) — only when local
-         * co-op is actually enabled. Operator-reported: "2nd player
-         * local coop player does not get assigned a character
-         * sprite/color in lobby." */
-        if (g_Game.hasSecondLocal
-            && my_char2 != 0xFF
-            && my_char2 < (uint8_t)unet_glue_num_characters()) {
-            int sprite_id2 = unet_glue_character_sprite_for(my_char2);
-            if (sprite_id2 >= 0) {
-                /* y = -50 puts the P2 preview ~22 pixels below P1 (a
-                 * 16-pixel sprite + 6-pixel gap). */
-                jo_sprite_draw3D(sprite_id2, 110, -50, 500);
-            }
-            font_printf(FONT_X(31), FONT_Y(6), 500, "P2 C%d", (int)my_char2);
-        } else {
-            font_draw("        ", FONT_X(31), FONT_Y(6), 500);
-        }
-        /* "YOU" label above the preview — col 32 puts it near the
-         * sprite (sprite x=110 in centered coords ≈ pixel col 33).
-         * Row 2 is above the player-list header (row 6) and clear of
-         * the "UTENYAA LOBBY" centered title (cols ~13-26). */
-        font_draw("YOU", FONT_X(32), FONT_Y(2), 500);
-    }
+    /* Per-row sprites are now drawn inline with each roster row above
+     * (one small 8×8 sprite per active player aligned with their
+     * name). The previous big-sprite preview block (two stacked 16×16
+     * sprites at top-right) was removed because (a) it overlapped the
+     * column-header row 6 and (b) per-row sprites give every player
+     * — local and remote — visual identification, not just P1/P2.
+     * The '>' marker on the local user's row + the per-row sprite is
+     * sufficient self-identification; no separate "YOU" label
+     * needed. */
 
     /* Disconnect-confirmation overlay removed in simplified mode —
      * B now leaves lobby immediately (see lobby_input). */
