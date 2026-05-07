@@ -148,31 +148,76 @@ namespace Entities
 				new Entities::Bullet(this->controller, movementDir, this->position);
 				if (g_Game.isOnlineMode)
 				{
-					unet_send_fire_bullet(
-						this->position.x.Value(), this->position.y.Value(), this->position.z.Value(),
-						movementDir.x.Value(), movementDir.y.Value(), movementDir.z.Value());
+					/* Tag the bullet with the actual local shooter pid.
+					 * P1 uses the original FIRE_BULLET; P2 uses the
+					 * FIRE_BULLET_P2 variant that prepends the shooter
+					 * pid so the server doesn't fall back to c.game_pid
+					 * (always P1) and end up walking the lag-comp path
+					 * from P2's position with shooter=P1 — which finds
+					 * P2 itself at distance 0 and damages P2 instead
+					 * of P1. Operator-reported on local co-op:
+					 * "when player 2 destroys player 1, instead of
+					 * player 1 dying, player 2 goes through death
+					 * animation." */
+					const bool isP2 = g_Game.hasSecondLocal &&
+						(uint8_t)this->controller == g_Game.myPlayerID2 &&
+						(uint8_t)this->controller != g_Game.myPlayerID;
+					if (isP2)
+					{
+						unet_send_fire_bullet_p2(
+							(uint8_t)this->controller,
+							this->position.x.Value(), this->position.y.Value(), this->position.z.Value(),
+							movementDir.x.Value(), movementDir.y.Value(), movementDir.z.Value());
+					}
+					else
+					{
+						unet_send_fire_bullet(
+							this->position.x.Value(), this->position.y.Value(), this->position.z.Value(),
+							movementDir.x.Value(), movementDir.y.Value(), movementDir.z.Value());
+					}
 				}
 			}
 
 			// Use pickup
 			if (isLocalCtrl && Helpers::IsControllerButtonDown(this->controller, JO_KEY_B))
 			{
+				/* Same shooter-pid tagging logic as fire-A above —
+				 * mines/bombs need the actual local pid so server
+				 * attribution is correct for P2 co-op. */
+				const bool isP2_pickup = g_Game.hasSecondLocal &&
+					(uint8_t)this->controller == g_Game.myPlayerID2 &&
+					(uint8_t)this->controller != g_Game.myPlayerID;
 				switch (this->hasPickup)
 				{
 				case Messages::Pickup::PickupType::Mine:
 					new Mine(this->controller, this->position);
 					if (g_Game.isOnlineMode)
-						unet_send_drop_mine(this->position.x.Value(),
-											this->position.y.Value(),
-											this->position.z.Value());
+					{
+						if (isP2_pickup)
+							unet_send_drop_mine_p2((uint8_t)this->controller,
+								this->position.x.Value(),
+								this->position.y.Value(),
+								this->position.z.Value());
+						else
+							unet_send_drop_mine(this->position.x.Value(),
+								this->position.y.Value(),
+								this->position.z.Value());
+					}
 					break;
 
 				case Messages::Pickup::PickupType::Bomb:
 					new Bomb(movementDir, this->position);
 					if (g_Game.isOnlineMode)
-						unet_send_throw_bomb(
-							this->position.x.Value(), this->position.y.Value(), this->position.z.Value(),
-							movementDir.x.Value(), movementDir.y.Value(), movementDir.z.Value());
+					{
+						if (isP2_pickup)
+							unet_send_throw_bomb_p2((uint8_t)this->controller,
+								this->position.x.Value(), this->position.y.Value(), this->position.z.Value(),
+								movementDir.x.Value(), movementDir.y.Value(), movementDir.z.Value());
+						else
+							unet_send_throw_bomb(
+								this->position.x.Value(), this->position.y.Value(), this->position.z.Value(),
+								movementDir.x.Value(), movementDir.y.Value(), movementDir.z.Value());
+					}
 					break;
 
 				default:

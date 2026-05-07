@@ -299,6 +299,42 @@ static void on_game_start(const uint8_t* p, int len)
         g_net.game_roster[i].active = g_net.lobby_players[i].active;
         g_net.game_roster[i].character_id = g_net.lobby_players[i].character_id;
     }
+    /* Optional GAME_START roster extension. The lobby-derived roster
+     * above uses lobby_players[].id which for P2 co-op slots is a
+     * SYNTHETIC id (100+offset) that doesn't match the in-game pid
+     * (allocated in _start_game and announced via LOCAL_PLAYER_ACK).
+     * Player::Draw looks up by `controller == game_roster[i].id`,
+     * so without this extension P2's render falls through to the
+     * controller-pid fallback (charIdx = controller) and ends up
+     * showing the same sprite as P1 if both happen to map to the
+     * same fallback. New servers append a real pid→char_id list
+     * after the crate array; parse it and OVERWRITE the relevant
+     * roster entries with the authoritative server pids. */
+    if (off < len) {
+        int rcount = p[off++];
+        if (rcount > UNET_MAX_PLAYERS) rcount = UNET_MAX_PLAYERS;
+        /* Each pair is 2 bytes (pid + char_id). */
+        for (i = 0; i < rcount && off + 2 <= len; i++) {
+            uint8_t pid     = p[off++];
+            uint8_t char_id = p[off++];
+            /* Find or replace the roster entry for this pid. */
+            int slot = -1;
+            int j;
+            for (j = 0; j < g_net.game_roster_count; j++) {
+                if (g_net.game_roster[j].id == pid) { slot = j; break; }
+            }
+            if (slot < 0 && g_net.game_roster_count < UNET_MAX_PLAYERS) {
+                slot = g_net.game_roster_count++;
+                g_net.game_roster[slot].name[0] = '\0';
+                g_net.game_roster[slot].active  = true;
+            }
+            if (slot >= 0) {
+                g_net.game_roster[slot].id = pid;
+                g_net.game_roster[slot].active = true;
+                g_net.game_roster[slot].character_id = char_id;
+            }
+        }
+    }
     clear_remote_players();
     g_net.local_frame = 0;
     g_net.state = UNET_STATE_PLAYING;
@@ -1004,10 +1040,50 @@ void unet_send_fire_bullet(int32_t x, int32_t y, int32_t z,
     send_pos_vel(UNET_MSG_CLIENT_FIRE_BULLET, x, y, z, dx, dy, dz);
 }
 
+void unet_send_fire_bullet_p2(uint8_t shooter_pid,
+                              int32_t x, int32_t y, int32_t z,
+                              int32_t dx, int32_t dy, int32_t dz)
+{
+    /* P2 variant — prepends shooter_pid so the server can attribute
+     * the bullet to the correct local player instead of c.game_pid
+     * (which is always P1). Without this the lag-comp walk found P2
+     * itself at distance 0 from origin and damaged P2 instead of P1. */
+    int payload = 1 + 1 + 4*6;
+    g_net.tx_buf[0] = (uint8_t)((payload >> 8) & 0xFF);
+    g_net.tx_buf[1] = (uint8_t)(payload & 0xFF);
+    g_net.tx_buf[2] = UNET_MSG_CLIENT_FIRE_BULLET_P2;
+    g_net.tx_buf[3] = shooter_pid;
+    unet_w_u32(&g_net.tx_buf[4],  (uint32_t)x);
+    unet_w_u32(&g_net.tx_buf[8],  (uint32_t)y);
+    unet_w_u32(&g_net.tx_buf[12], (uint32_t)z);
+    unet_w_u32(&g_net.tx_buf[16], (uint32_t)dx);
+    unet_w_u32(&g_net.tx_buf[20], (uint32_t)dy);
+    unet_w_u32(&g_net.tx_buf[24], (uint32_t)dz);
+    tx(g_net.tx_buf, 2 + payload);
+}
+
 void unet_send_throw_bomb(int32_t x, int32_t y, int32_t z,
                           int32_t dx, int32_t dy, int32_t dz)
 {
     send_pos_vel(UNET_MSG_CLIENT_THROW_BOMB, x, y, z, dx, dy, dz);
+}
+
+void unet_send_throw_bomb_p2(uint8_t shooter_pid,
+                             int32_t x, int32_t y, int32_t z,
+                             int32_t dx, int32_t dy, int32_t dz)
+{
+    int payload = 1 + 1 + 4*6;
+    g_net.tx_buf[0] = (uint8_t)((payload >> 8) & 0xFF);
+    g_net.tx_buf[1] = (uint8_t)(payload & 0xFF);
+    g_net.tx_buf[2] = UNET_MSG_CLIENT_THROW_BOMB_P2;
+    g_net.tx_buf[3] = shooter_pid;
+    unet_w_u32(&g_net.tx_buf[4],  (uint32_t)x);
+    unet_w_u32(&g_net.tx_buf[8],  (uint32_t)y);
+    unet_w_u32(&g_net.tx_buf[12], (uint32_t)z);
+    unet_w_u32(&g_net.tx_buf[16], (uint32_t)dx);
+    unet_w_u32(&g_net.tx_buf[20], (uint32_t)dy);
+    unet_w_u32(&g_net.tx_buf[24], (uint32_t)dz);
+    tx(g_net.tx_buf, 2 + payload);
 }
 
 void unet_send_drop_mine(int32_t x, int32_t y, int32_t z)
@@ -1019,6 +1095,20 @@ void unet_send_drop_mine(int32_t x, int32_t y, int32_t z)
     unet_w_u32(&g_net.tx_buf[3],  (uint32_t)x);
     unet_w_u32(&g_net.tx_buf[7],  (uint32_t)y);
     unet_w_u32(&g_net.tx_buf[11], (uint32_t)z);
+    tx(g_net.tx_buf, 2 + payload);
+}
+
+void unet_send_drop_mine_p2(uint8_t shooter_pid,
+                            int32_t x, int32_t y, int32_t z)
+{
+    int payload = 1 + 1 + 4*3;
+    g_net.tx_buf[0] = (uint8_t)((payload >> 8) & 0xFF);
+    g_net.tx_buf[1] = (uint8_t)(payload & 0xFF);
+    g_net.tx_buf[2] = UNET_MSG_CLIENT_DROP_MINE_P2;
+    g_net.tx_buf[3] = shooter_pid;
+    unet_w_u32(&g_net.tx_buf[4],  (uint32_t)x);
+    unet_w_u32(&g_net.tx_buf[8],  (uint32_t)y);
+    unet_w_u32(&g_net.tx_buf[12], (uint32_t)z);
     tx(g_net.tx_buf, 2 + payload);
 }
 

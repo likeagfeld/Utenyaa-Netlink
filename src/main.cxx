@@ -45,8 +45,27 @@ extern "C" int unet_glue_num_characters(void)
 extern "C" int unet_glue_character_sprite_for(uint8_t character_id)
 {
 	const int frames_per_char = 5;
+	const int kBuiltinChars = 5;
 	int n = unet_glue_num_characters();
 	int idx = (character_id < (uint8_t)n) ? (int)character_id : 0;
+	/* Custom characters (id >= 5): if the Saturn downloaded this
+	 * custom AND ccd_register_sprites successfully claimed VDP1
+	 * slots for it, return the registered sprite ID. Otherwise fall
+	 * back to a built-in (mod kBuiltinChars) so the lobby preview
+	 * doesn't ask for sprite slot 25-29 which is BEYOND the loaded
+	 * CHARS.PAK range — operator-reported "preview sprite of
+	 * grimace custom character in lobby select is not looking right"
+	 * was caused by reading garbage VRAM at sprite_id 25+. */
+	if (idx >= kBuiltinChars)
+	{
+		int local_idx = idx - kBuiltinChars;
+		int custom_id = cc_download_get_sprite_id(local_idx);
+		if (custom_id >= 0) return custom_id;
+		/* Fallback: render a built-in. Same mod-N approach as the
+		 * Player::Draw fallback so the visual is at least stable
+		 * (always the same built-in for a given custom slot). */
+		idx = idx % kBuiltinChars;
+	}
 	return Entities::Player::GetCharacterSpriteStart() + idx * frames_per_char;
 }
 

@@ -366,9 +366,17 @@ void unet_send_player_state_p2(int32_t x, int32_t y, int32_t z,
                                int16_t angle, uint8_t health);
 void unet_send_fire_bullet(int32_t x, int32_t y, int32_t z,
                            int32_t dx, int32_t dy, int32_t dz);
+void unet_send_fire_bullet_p2(uint8_t shooter_pid,
+                              int32_t x, int32_t y, int32_t z,
+                              int32_t dx, int32_t dy, int32_t dz);
 void unet_send_drop_mine(int32_t x, int32_t y, int32_t z);
+void unet_send_drop_mine_p2(uint8_t shooter_pid,
+                            int32_t x, int32_t y, int32_t z);
 void unet_send_throw_bomb(int32_t x, int32_t y, int32_t z,
                           int32_t dx, int32_t dy, int32_t dz);
+void unet_send_throw_bomb_p2(uint8_t shooter_pid,
+                             int32_t x, int32_t y, int32_t z,
+                             int32_t dx, int32_t dy, int32_t dz);
 void unet_send_pickup_crate(uint8_t slot);
 void unet_send_player_death(void);
 void unet_send_player_death_p2(void);

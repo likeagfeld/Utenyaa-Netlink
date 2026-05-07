@@ -20,6 +20,7 @@
  */
 
 #include <jo/jo.h>
+#include <stdio.h>                    /* snprintf for character_id row */
 #include "lobby.h"
 #include "font.h"
 #include "net/utenyaa_game.h"
@@ -481,14 +482,24 @@ void lobby_draw(void)
      * "P2:" line, no vote tally — these were all writing strings
      * containing 'P2: ' / '2: ' bytes that recurred as the literal
      * value of the recurring jo_free 'Bad pointer 0x..323A20' crash. */
-    font_draw("#  NAME             STATUS", FONT_X(1), FONT_Y(6), 500);
+    font_draw("#  NAME             CHAR  STATUS", FONT_X(1), FONT_Y(6), 500);
     for (i = 0; i < UNET_MAX_LOBBY; i++) {
         if (i < nd->lobby_count && nd->lobby_players[i].active) {
             const unet_lobby_player_t* lp = &nd->lobby_players[i];
             char marker = (lp->id == g_Game.myPlayerID) ? '>' : ' ';
+            /* Show character_id in the roster row so each player can
+             * see which color is assigned to which slot — operator-
+             * reported "P2 doesn't show a character_id" couldn't be
+             * verified visually before this column existed. 0xFF
+             * renders as "--" (server hasn't assigned yet). */
+            char char_buf[4];
+            if (lp->character_id == 0xFF)
+                snprintf(char_buf, sizeof(char_buf), "--");
+            else
+                snprintf(char_buf, sizeof(char_buf), "%2u", (unsigned)lp->character_id);
             font_printf(FONT_X(1), FONT_Y(7 + i), 500,
-                        "%c%-2d %-16s %s",
-                        marker, i + 1, lp->name,
+                        "%c%-2d %-16s %2s   %s",
+                        marker, i + 1, lp->name, char_buf,
                         lp->ready ? "READY" : "     ");
         } else {
             /* Pad vacated slot with spaces so a previously-occupied
@@ -556,30 +567,52 @@ void lobby_draw(void)
      *      matrix is current before any online-screen sprite call. */
     {
         uint8_t my_char = 0xFF;
+        uint8_t my_char2 = 0xFF;
         for (int k = 0; k < nd->lobby_count; k++) {
             if (nd->lobby_players[k].id == g_Game.myPlayerID) {
                 my_char = nd->lobby_players[k].character_id;
-                break;
+            }
+            /* Lobby state for P2 is tagged with a synthetic id
+             * (100 + uid*4 + j). The Saturn knows its own uid via
+             * my_player_id (P1). Match P2's row by id-range +
+             * by being labeled with our P2 name. We don't need to
+             * be precise — pull the FIRST entry in the synthetic
+             * range that's not us. */
+            if (g_Game.hasSecondLocal &&
+                nd->lobby_players[k].id != g_Game.myPlayerID &&
+                nd->lobby_players[k].id >= 100 &&
+                my_char2 == 0xFF)
+            {
+                my_char2 = nd->lobby_players[k].character_id;
             }
         }
+        /* P1 preview (right side, upper) */
         if (my_char != 0xFF
             && my_char < (uint8_t)unet_glue_num_characters()) {
             int sprite_id = unet_glue_character_sprite_for(my_char);
             if (sprite_id >= 0) {
-                /* Position in screen-centered coords (origin at TV
-                 * middle). x=110 = right side, y=-72 = upper area
-                 * (negative Y is up in SGL screen space). z=500
-                 * matches the font plane depth. */
                 jo_sprite_draw3D(sprite_id, 110, -72, 500);
             }
-            /* Numeric character index hint so the operator gets
-             * unambiguous L/R feedback even when two characters
-             * happen to share a similar built-in pose. */
-            font_printf(FONT_X(31), FONT_Y(3), 500, "CHAR %d", (int)my_char);
+            font_printf(FONT_X(31), FONT_Y(3), 500, "P1 C%d", (int)my_char);
         } else {
-            /* Pad the label area when no preview is drawable so a
-             * previous frame's CHAR-N label doesn't linger. */
-            font_draw("       ", FONT_X(31), FONT_Y(3), 500);
+            font_draw("        ", FONT_X(31), FONT_Y(3), 500);
+        }
+        /* P2 preview (right side, just below P1) — only when local
+         * co-op is actually enabled. Operator-reported: "2nd player
+         * local coop player does not get assigned a character
+         * sprite/color in lobby." */
+        if (g_Game.hasSecondLocal
+            && my_char2 != 0xFF
+            && my_char2 < (uint8_t)unet_glue_num_characters()) {
+            int sprite_id2 = unet_glue_character_sprite_for(my_char2);
+            if (sprite_id2 >= 0) {
+                /* y = -50 puts the P2 preview ~22 pixels below P1 (a
+                 * 16-pixel sprite + 6-pixel gap). */
+                jo_sprite_draw3D(sprite_id2, 110, -50, 500);
+            }
+            font_printf(FONT_X(31), FONT_Y(6), 500, "P2 C%d", (int)my_char2);
+        } else {
+            font_draw("        ", FONT_X(31), FONT_Y(6), 500);
         }
         /* "YOU" label above the preview — col 32 puts it near the
          * sprite (sprite x=110 in centered coords ≈ pixel col 33).

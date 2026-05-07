@@ -67,6 +67,20 @@ extern "C" {
 #define UNET_MSG_CHARACTER_SELECT_P2 0x24 /* [player_id:1][char_id:1] */
 #define UNET_MSG_CLIENT_DBG_LOG    0x25  /* [len:1][text:N] - free-form debug trace, server logs to journal */
 #define UNET_MSG_MAP_PICK_VOTE     0x26  /* [idx:1] - vote for a map in the lobby pick list */
+/* P2-explicit shooter variants. The original FIRE_BULLET / DROP_MINE
+ * / THROW_BOMB used `c.game_pid` (P1's pid) as the shooter regardless
+ * of which local controller actually fired — fine for solo play, but
+ * for local co-op the server attributed P2's shots to P1 and the
+ * bullet's lag-comp walk found P2 itself at distance 0 from the
+ * origin (P2's own position) and damaged P2 instead of P1. Operator
+ * reported: "when player 2 local co-op destroys player 1, instead of
+ * player 1 dying, it makes player 2 go through death animation."
+ * The _P2 variants prepend the shooter's pid; server validates pid
+ * against c.local_pids and uses it as the shooter for the lag-comp
+ * check. */
+#define UNET_MSG_CLIENT_FIRE_BULLET_P2 0x27 /* [shooter_pid:1][dx:4][dy:4][dz:4][x:4][y:4][z:4] */
+#define UNET_MSG_CLIENT_DROP_MINE_P2   0x28 /* [shooter_pid:1][x:4][y:4][z:4] */
+#define UNET_MSG_CLIENT_THROW_BOMB_P2  0x29 /* [shooter_pid:1][dx:4][dy:4][dz:4][x:4][y:4][z:4] */
 
 /*============================================================================
  * Utenyaa Server -> Client Opcodes (0xA0-0xBF)

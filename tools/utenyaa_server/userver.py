@@ -137,6 +137,16 @@ UNET_CLIENT_FIRE_BULLET = 0x1E
 UNET_CLIENT_DROP_MINE = 0x1F
 UNET_CLIENT_THROW_BOMB = 0x20
 UNET_CLIENT_PICKUP_CRATE = 0x21
+# P2-explicit shooter variants — Saturn sends these when the local
+# controller that fired is the P2 co-op slot, prepending shooter_pid
+# so the server doesn't fall back to c.game_pid (always P1) and
+# attribute the bullet to the wrong player. Without this the
+# lag-comp walk for a P2 shot starts at P2's position with
+# shooter=P1, finds P2 itself at distance 0, and damages P2 instead
+# of P1.
+UNET_CLIENT_FIRE_BULLET_P2 = 0x27
+UNET_CLIENT_DROP_MINE_P2   = 0x28
+UNET_CLIENT_THROW_BOMB_P2  = 0x29
 UNET_STAGE_VOTE = 0x22
 UNET_STAGE_LOADED_ACK = 0x23
 UNET_CLIENT_DBG_LOG   = 0x25
@@ -301,7 +311,16 @@ def build_stage_vote_tally(tally: list) -> bytes:
 
 
 def build_game_start(seed: int, my_id: int, stage: int, player_count: int,
-                     match_seconds: int, crates: list) -> bytes:
+                     match_seconds: int, crates: list,
+                     char_roster: list = None) -> bytes:
+    """char_roster, if provided, is a list of (pid, char_id) pairs for
+    every player in the match. Appended after the crate array so the
+    Saturn can rebuild game_roster directly from authoritative server
+    pid→char mappings instead of relying on lobby_state's synthetic
+    P2 ids (id=100+offset) which don't match the in-game pid space.
+    Operator-reported "P2 local co-op got the character selected for
+    player 1" was caused by Saturn falling back to controller-pid as
+    the char index for P2 because lobby_players[].id never matched."""
     payload = bytes([UNET_GAME_START])
     payload += struct.pack("!I", seed & 0xFFFFFFFF)
     payload += bytes([my_id & 0xFF, stage & 0xFF, player_count & 0xFF])
@@ -311,6 +330,13 @@ def build_game_start(seed: int, my_id: int, stage: int, player_count: int,
         payload += bytes([c["slot"] & 0xFF])
         payload += struct.pack("!iii", _signed32(c["x"]), _signed32(c["y"]), _signed32(c["z"]))
         payload += bytes([c["flags"] & 0xFF])
+    # Optional roster extension. Older Saturn builds will stop parsing
+    # at the end of the crate list and use the lobby-derived roster
+    # (broken for P2 but harmless). New builds parse this and override.
+    if char_roster:
+        payload += bytes([len(char_roster) & 0xFF])
+        for pid, char_id in char_roster:
+            payload += bytes([pid & 0xFF, char_id & 0xFF])
     return encode_frame(payload)
 
 
@@ -1889,11 +1915,19 @@ class UtenyaaServer:
             # transfer wall clock; well within UNET_AUTH_TIMEOUT.)
             time.sleep(0.5)
 
+        # Build the authoritative pid→character roster from
+        # game_players (set in the spawn loop above with the right
+        # P1 and P2 character_ids each). Saturn uses this to
+        # initialize game_roster directly instead of relying on
+        # lobby_players which has synthetic P2 ids.
+        char_roster = [(pid, p.character_id)
+                       for pid, p in self.game_players.items()]
         for cc in self.clients.values():
             if not cc.authenticated or not cc.in_game:
                 continue
             cc.send_raw(build_game_start(seed, cc.game_pid, stage, next_pid,
-                                         self.match_seconds, crate_roster))
+                                         self.match_seconds, crate_roster,
+                                         char_roster))
         stage_label = (f"STREAMED({self.tune.get('live_map_slug','?')})"
                        if stage == UNET_STAGE_STREAMED
                        else STAGE_NAMES[stage] if 0 <= stage < len(STAGE_NAMES)
@@ -2532,6 +2566,34 @@ class UtenyaaServer:
             x, y, z, dx, dy, dz = struct.unpack("!iiiiii", payload[1:25])
             eid = self.match.alloc_entity_id()
             self._broadcast(build_bomb_spawn(eid, c.game_pid, x, y, z, dx, dy, dz))
+        elif op == UNET_CLIENT_FIRE_BULLET_P2 and len(payload) >= 1 + 1 + 24:
+            # P2 variant: [op][shooter_pid][x:4][y:4][z:4][dx:4][dy:4][dz:4]
+            if self.match is None: return
+            shooter_pid = payload[1]
+            # Validate that shooter_pid is one of THIS client's local
+            # co-op pids — refuse to spoof someone else's bullet.
+            if shooter_pid not in c.local_pids: return
+            x, y, z, dx, dy, dz = struct.unpack("!iiiiii", payload[2:26])
+            eid = self.match.alloc_entity_id()
+            self._broadcast(build_bullet_spawn(eid, shooter_pid, x, y, z, dx, dy, dz))
+            self._lag_comp_bullet_check(shooter_pid, x, y, z, dx, dy, dz,
+                                        rewind_ticks=3,
+                                        cone_radius=12,
+                                        damage=BULLET_DAMAGE)
+        elif op == UNET_CLIENT_DROP_MINE_P2 and len(payload) >= 1 + 1 + 12:
+            if self.match is None: return
+            shooter_pid = payload[1]
+            if shooter_pid not in c.local_pids: return
+            x, y, z = struct.unpack("!iii", payload[2:14])
+            eid = self.match.alloc_entity_id()
+            self._broadcast(build_mine_spawn(eid, shooter_pid, x, y, z))
+        elif op == UNET_CLIENT_THROW_BOMB_P2 and len(payload) >= 1 + 1 + 24:
+            if self.match is None: return
+            shooter_pid = payload[1]
+            if shooter_pid not in c.local_pids: return
+            x, y, z, dx, dy, dz = struct.unpack("!iiiiii", payload[2:26])
+            eid = self.match.alloc_entity_id()
+            self._broadcast(build_bomb_spawn(eid, shooter_pid, x, y, z, dx, dy, dz))
         elif op == UNET_CLIENT_PICKUP_CRATE and len(payload) >= 2:
             if self.match is None: return
             slot = payload[1]
