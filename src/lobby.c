@@ -512,23 +512,29 @@ void lobby_draw(void)
                         "%c%-2d %-16s %2s   %-5s     ",
                         marker, i + 1, lp->name, char_buf,
                         lp->ready ? "READY" : "");
-            /* Native-size sprite (no scale change) — 16×16 spans
-             * exactly 2 text rows, the slot's allotted vertical
-             * space. The earlier full-size top-right preview at
-             * (110, -72) positioned correctly without any pixel
-             * compensation, so at scale=1.0 the SGL projection IS
-             * pixel-1:1; the +16 compensation we needed for scale
-             * 0.5 doesn't apply here. */
+            /* Native-size sprite — 16×16 spans the 2-row slot.
+             * jo_sprite_draw3D projects through the SGL camera
+             * (set up at boot for the gameplay angle), and the
+             * projection adds a +16 px (= +2 text rows) downshift
+             * to the world-Y that the operator empirically
+             * confirmed in rounds 9-10. Subtract 16 from the
+             * computed sy so the sprite lands on the same rows
+             * as the name. The offset is constant in pixel space
+             * (not proportional to sprite scale) — verified by
+             * round 11 retest at native scale where the operator
+             * reported "text and sprites are still not aligning"
+             * after the offset was removed. */
             if (lp->character_id != 0xFF
                 && lp->character_id < (uint8_t)unet_glue_num_characters()) {
                 int sprite_id = unet_glue_character_sprite_for(lp->character_id);
                 if (sprite_id >= 0) {
                     /* x: column 35 centre.
                      * y: midpoint of the 2-row pair (8 px below
-                     *    the top of name_row), so the 16-px sprite
-                     *    centred there spans both rows exactly. */
+                     *    the top of name_row) MINUS the +16 px
+                     *    projection downshift, so the sprite
+                     *    centres exactly on the name+gap pair. */
                     int sx = -160 + 35 * 8 + 4;
-                    int sy = -112 + name_row * 8 + 8;
+                    int sy = -112 + name_row * 8 + 8 - 16;
                     jo_sprite_draw3D(sprite_id, sx, sy, 500);
                 }
             }
