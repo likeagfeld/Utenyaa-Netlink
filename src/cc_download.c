@@ -422,8 +422,14 @@ void cc_download_draw(void)
         const unet_state_data_t* nd = unet_get_data();
         int total = (int)nd->cc_list_count;
         int done = s_dl_idx;
-        snprintf(status, sizeof(status), "Downloading char %d/%d",
-                 done + 1, total);
+        {
+            char raw[40];
+            snprintf(raw, sizeof(raw), "Downloading char %d/%d",
+                     done + 1, total);
+            /* Same 30-char pad as CCD_DONE — keep centered column
+             * stable so transitions don't leak leading chars. */
+            snprintf(status, sizeof(status), "%-30s", raw);
+        }
         /* Progress bar — 20 cells wide. */
         int filled = (total > 0)
             ? (done * 20 / total)
@@ -441,7 +447,15 @@ void cc_download_draw(void)
     }
     case CCD_DONE: {
         int n = s_payload_count;
-        snprintf(status, sizeof(status), "Download complete: %2d chars", n);
+        char raw[40];
+        snprintf(raw, sizeof(raw), "Download complete: %2d chars", n);
+        /* Pad to 30 chars so the centered draw column stays at the
+         * SAME col regardless of state. Without this, the 21-char
+         * "Listing characters..." (centered at col 5) leaks "Li"
+         * leading characters when the shorter "Download complete..."
+         * (centered at col 7) overwrites only cols 7+ — operator-
+         * reported "LiDownload Complete:..." artifact. */
+        snprintf(status, sizeof(status), "%-30s", raw);
         snprintf(progress, sizeof(progress), "%-30s", "Press A to return to title");
         break;
     }

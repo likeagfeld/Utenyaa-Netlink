@@ -99,16 +99,21 @@ int main()
 	jo_core_init(JO_COLOR_Black);
 	slDynamicFrame(1);
 
-	// Hide NBG1 (the title-logo plane) until LOGO.TGA has been
-	// decoded into VRAM. Without this, the operator sees ~3 seconds
-	// of uninitialized VRAM as garbled pixelated noise on the title
-	// graphic while the boot sequence loads sounds + PAKs from CD —
-	// jo_core_init enables NBG1ON by default but NBG1 VRAM still
-	// holds the garbage left by the BIOS at this point. ShowLogo
-	// is called again right after jo_set_background_8bits_sprite
-	// finishes the decode so the visible flicker window collapses
-	// to one frame instead of three seconds.
+	// Hide NBG1 + ZERO the NBG1 bitmap VRAM so the operator doesn't
+	// see uninitialised BIOS garbage during the 2-3 s window it takes
+	// CD to load sounds + PAKs. The previous fix only called
+	// HideLogo (slScrAutoDisp NBG1OFF), but operator-reported the
+	// garbled noise was STILL visible — `slScrAutoDisp` queues the
+	// screen-enable bit for the next vblank, but jo_vdp2_malloc
+	// hands out VDP2 VRAM segments WITHOUT zeroing them, so the
+	// brief window before the disable takes effect AND any
+	// re-enable triggered by setup calls (slBitMapNbg1 etc.)
+	// rendered whatever the BIOS left in A0. Filling with black
+	// makes the worst case an uninteresting black screen instead
+	// of fixed-pattern noise. ShowLogo at line ~141 puts the
+	// proper logo back once LOGO.TGA finishes decoding.
 	Helpers::HideLogo();
+	jo_vdp2_clear_bitmap_nbg1(JO_COLOR_Black);
 	Objects::Terrain::InitColliders();
 	IMessageHandler::Init();
 

@@ -151,6 +151,17 @@ typedef struct {
     char my_uuid[SNCP_UUID_LEN + 4];
     bool has_uuid;
     uint8_t my_player_id;
+    /* Stable server-assigned user id (set ONCE on WELCOME and never
+     * overwritten). Used by the lobby preview lookup which matches
+     * lobby_players[].id (server's user_id space) against MY id —
+     * before this stash, my_player_id was overwritten by GAME_START
+     * to the game_pid (0..3 space) and never reverted post-match,
+     * so post-match the lobby preview's `lobby_players[k].id ==
+     * my_player_id` check failed for the LOCAL P1 row (operator-
+     * reported "P1 sprite is still missing" on returning to lobby
+     * after first game). Lobby code now uses my_user_id; in-game
+     * code paths stay on my_player_id. */
+    uint8_t my_user_id;
     uint8_t my_player_id2;     /* 0xFF if no P2 co-op */
     bool has_second_local;
     int auth_timer;

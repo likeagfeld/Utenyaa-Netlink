@@ -218,7 +218,7 @@ void lobby_input(void)
             const unet_state_data_t* nd = unet_get_data();
             uint8_t cur = 0;
             for (int k = 0; k < nd->lobby_count; k++) {
-                if (nd->lobby_players[k].id == g_Game.myPlayerID) {
+                if (nd->lobby_players[k].id == nd->my_user_id) {
                     cur = nd->lobby_players[k].character_id;
                     if (cur >= (uint8_t)unet_glue_num_characters()) cur = 0;
                     break;
@@ -236,7 +236,7 @@ void lobby_input(void)
             const unet_state_data_t* nd = unet_get_data();
             uint8_t cur = 0;
             for (int k = 0; k < nd->lobby_count; k++) {
-                if (nd->lobby_players[k].id == g_Game.myPlayerID) {
+                if (nd->lobby_players[k].id == nd->my_user_id) {
                     cur = nd->lobby_players[k].character_id;
                     if (cur >= (uint8_t)unet_glue_num_characters()) cur = 0;
                     break;
@@ -486,7 +486,7 @@ void lobby_draw(void)
     for (i = 0; i < UNET_MAX_LOBBY; i++) {
         if (i < nd->lobby_count && nd->lobby_players[i].active) {
             const unet_lobby_player_t* lp = &nd->lobby_players[i];
-            char marker = (lp->id == g_Game.myPlayerID) ? '>' : ' ';
+            char marker = (lp->id == nd->my_user_id) ? '>' : ' ';
             /* Show character_id in the roster row so each player can
              * see which color is assigned to which slot — operator-
              * reported "P2 doesn't show a character_id" couldn't be
@@ -569,7 +569,7 @@ void lobby_draw(void)
         uint8_t my_char = 0xFF;
         uint8_t my_char2 = 0xFF;
         for (int k = 0; k < nd->lobby_count; k++) {
-            if (nd->lobby_players[k].id == g_Game.myPlayerID) {
+            if (nd->lobby_players[k].id == nd->my_user_id) {
                 my_char = nd->lobby_players[k].character_id;
             }
             /* Lobby state for P2 is tagged with a synthetic id
@@ -579,7 +579,7 @@ void lobby_draw(void)
              * be precise — pull the FIRST entry in the synthetic
              * range that's not us. */
             if (g_Game.hasSecondLocal &&
-                nd->lobby_players[k].id != g_Game.myPlayerID &&
+                nd->lobby_players[k].id != nd->my_user_id &&
                 nd->lobby_players[k].id >= 100 &&
                 my_char2 == 0xFF)
             {

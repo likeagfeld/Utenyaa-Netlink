@@ -176,6 +176,12 @@ static void on_welcome(const uint8_t* p, int len)
     int off, i;
     if (len < 2) return;
     g_net.my_player_id = p[1];
+    /* Stash the user_id as the stable lobby identity. GAME_START
+     * later overwrites my_player_id with game_pid (0..3 space) for
+     * the duration of the match, but my_user_id stays put so the
+     * lobby preview can still match the LOCAL row against the
+     * server-broadcast lobby_state on post-match return. */
+    g_net.my_user_id = p[1];
     off = 2;
     if (off + SNCP_UUID_LEN <= len) {
         for (i = 0; i < SNCP_UUID_LEN; i++) g_net.my_uuid[i] = (char)p[off + i];
