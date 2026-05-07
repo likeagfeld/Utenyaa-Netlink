@@ -57,15 +57,6 @@ static int  s_dl_request_timer;   /* frames since we last sent a request */
 static int  s_list_wait_timer;    /* frames since CC_LIST_REQ sent */
 static int  s_a_held_prev;        /* edge-detect on A at DONE/FAILED */
 
-/* Per-character downloaded payloads. UNET_CC_MAX × ~2.6 KB ≈ 168 KB
- * static — sized for the design ceiling but in practice most users
- * will have <10 chars. Phase D reuses this pool when loading sprites
- * into VDP1 at game start. */
-#define CCD_MAX  UNET_CC_MAX
-static uint8_t s_payloads[CCD_MAX][UNET_CC_PAYLOAD_BYTES];
-static bool    s_payload_valid[CCD_MAX];
-static int     s_payload_count;
-
 /* Phase D — VDP1 sprite-slot registration. JO_MAX_SPRITE was bumped
  * to 130 in the makefile (was 100); base CHARS.PAK + EXP.PAK + WEAP.PAK
  * etc. consume ~103 slots — that leaves ~25 free for custom chars,
@@ -74,6 +65,24 @@ static int     s_payload_count;
  * actually selected (max 4 unique players) which would let us
  * support more customs without raising JO_MAX_SPRITE further. */
 #define CC_MAX_REGISTERED  5
+
+/* CCD_MAX = the cap on how many characters this Saturn caches in
+ * the static payload pool. CRITICAL: this directly multiplies the
+ * BSS footprint at CCD_MAX × UNET_CC_PAYLOAD_BYTES (2648). The
+ * upstream UNET_CC_MAX = 64 (server-side ceiling) is way too large
+ * for Saturn — at 64 × 2648 = ~168 KB BSS, the binary's runtime
+ * footprint busted the documented "~317 KB cold-boot binary-size
+ * threshold" and broke logo.tga loading on first boot of alpha-0.9
+ * (operator-reported "out of memory on logo.tga" + null pointer
+ * crashes downstream). Sized to CC_MAX_REGISTERED here so we only
+ * ever hold what we can register into VDP1 anyway. The download
+ * loop early-stops past CCD_MAX entries; if the server has more,
+ * the operator just gets the first 5. */
+#define CCD_MAX  CC_MAX_REGISTERED
+static uint8_t s_payloads[CCD_MAX][UNET_CC_PAYLOAD_BYTES];
+static bool    s_payload_valid[CCD_MAX];
+static int     s_payload_count;
+
 /* -1 means "not yet registered". A static int array initializes to
  * 0 by default, which is a valid sprite slot (sprite 0 = built-in
  * char 0 frame 0); using -1 prevents accidental aliasing before
@@ -138,7 +147,13 @@ static void ccd_send_list_req(void)
 static void ccd_request_next(void)
 {
     const unet_state_data_t* nd = unet_get_data();
-    if (s_dl_idx >= (int)nd->cc_list_count) {
+    /* Stop at server's count OR our static pool cap (CCD_MAX),
+     * whichever comes first. The pool cap protects against the
+     * BSS-overshoot that crashed alpha-0.9 boot when CCD_MAX was
+     * 64 × 2648 bytes. */
+    int hard_cap = (int)nd->cc_list_count;
+    if (hard_cap > CCD_MAX) hard_cap = CCD_MAX;
+    if (s_dl_idx >= hard_cap) {
         s_state = CCD_DONE;
         return;
     }
