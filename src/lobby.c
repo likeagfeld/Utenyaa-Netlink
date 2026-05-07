@@ -184,6 +184,51 @@ void lobby_input(void)
         g_Game.input.pressedStart = false;
     }
 
+    /* L / R triggers cycle the local player's character selection.
+     * Operator-requested visual sprite picker — pressing L picks the
+     * previous available character, R picks the next, where "available"
+     * means not already taken by another lobby player (per the existing
+     * character_taken / next_available_character helpers).
+     *
+     * The actual sprite preview is drawn in lobby_draw — this handler
+     * is just the input edge-detect + server send. */
+    if (jo_is_pad1_key_pressed(JO_KEY_L)) {
+        if (!g_ltrig_pressed) {
+            const unet_state_data_t* nd = unet_get_data();
+            uint8_t cur = 0;
+            for (int k = 0; k < nd->lobby_count; k++) {
+                if (nd->lobby_players[k].id == g_Game.myPlayerID) {
+                    cur = nd->lobby_players[k].character_id;
+                    if (cur >= (uint8_t)unet_glue_num_characters()) cur = 0;
+                    break;
+                }
+            }
+            uint8_t next = next_available_character(cur, -1);
+            if (next != cur) unet_send_character_select(next);
+        }
+        g_ltrig_pressed = true;
+    } else {
+        g_ltrig_pressed = false;
+    }
+    if (jo_is_pad1_key_pressed(JO_KEY_R)) {
+        if (!g_rtrig_pressed) {
+            const unet_state_data_t* nd = unet_get_data();
+            uint8_t cur = 0;
+            for (int k = 0; k < nd->lobby_count; k++) {
+                if (nd->lobby_players[k].id == g_Game.myPlayerID) {
+                    cur = nd->lobby_players[k].character_id;
+                    if (cur >= (uint8_t)unet_glue_num_characters()) cur = 0;
+                    break;
+                }
+            }
+            uint8_t next = next_available_character(cur, +1);
+            if (next != cur) unet_send_character_select(next);
+        }
+        g_rtrig_pressed = true;
+    } else {
+        g_rtrig_pressed = false;
+    }
+
     /* Y = disconnect — the ONLY way out of the lobby. No B, no Start,
      * no other path triggers disconnect or title return. */
     if (jo_is_pad1_key_pressed(JO_KEY_Y)) {
@@ -460,11 +505,43 @@ void lobby_draw(void)
         font_draw("                                      ", FONT_X(1), FONT_Y(19), 500);
     }
 
-    /* Controls hint */
-    font_draw("A:READY  START:GO  Y:DISCONNECT",
+    /* Controls hint — bumped to include L/R character cycle */
+    font_draw("A:READY  START:GO  L/R:CHAR  Y:OUT",
               FONT_X(1), FONT_Y(25), 500);
     font_draw("HOLD Z FOR LEADERBOARD",
               FONT_X(1), FONT_Y(26), 500);
+
+    /* Character sprite preview for the LOCAL player. Draws the
+     * "south" frame (frame 0) of whichever character_id the server
+     * has assigned/confirmed for our pid. Position is upper-right
+     * area of the screen so it doesn't collide with the roster
+     * text rows. Only one VDP1 sprite drawn per frame to keep
+     * cmd-table pressure low and avoid the lobby-sprite jo_free
+     * issues that motivated the prior simplified-mode removal. */
+    {
+        uint8_t my_char = 0xFF;
+        for (int k = 0; k < nd->lobby_count; k++) {
+            if (nd->lobby_players[k].id == g_Game.myPlayerID) {
+                my_char = nd->lobby_players[k].character_id;
+                break;
+            }
+        }
+        if (my_char != 0xFF
+            && my_char < (uint8_t)unet_glue_num_characters()) {
+            int sprite_id = unet_glue_character_sprite_for(my_char);
+            /* "south" frame is index 0 within the per-character
+             * 5-frame block — that's the front-facing portrait
+             * the operator wants to see while picking. */
+            if (sprite_id >= 0) {
+                /* Upper-right preview at (240, -68), z=500 to match
+                 * the font plane priority. Y is negative because
+                 * jo_sprite_draw3D uses centered-coordinates with
+                 * the screen origin at the middle. */
+                jo_sprite_draw3D(sprite_id, 110, -75, 500);
+            }
+        }
+        font_draw_centered("YOU", 30, 500);   /* tiny label above preview */
+    }
 
     /* Disconnect-confirmation overlay removed in simplified mode —
      * B now leaves lobby immediately (see lobby_input). */
