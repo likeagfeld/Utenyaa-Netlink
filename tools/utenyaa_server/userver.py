@@ -171,6 +171,35 @@ UNET_MAP_BEGIN = 0xB8
 UNET_MAP_CHUNK = 0xB9
 UNET_MAP_END   = 0xBA
 
+# Phase B — Custom character distribution.
+# Title-screen "Download Additional Characters" flow: Saturn dials in,
+# requests the list (UNET_CC_LIST_REQ), receives one CC_LIST_RESP per
+# character (slug + display name), and for each issues a CC_DOWNLOAD_REQ
+# that triggers a CC_BEGIN / N×CC_CHUNK / CC_END stream parallel to
+# the MAP_* protocol.
+UNET_CC_LIST_REQ      = 0xC0   # Saturn → server: list custom characters
+UNET_CC_LIST_RESP     = 0xC1   # server → Saturn: one list entry
+UNET_CC_DOWNLOAD_REQ  = 0xC2   # Saturn → server: stream char N to me
+UNET_CC_BEGIN         = 0xC3   # server → Saturn: char N stream header
+UNET_CC_CHUNK         = 0xC4   # server → Saturn: char N chunk
+UNET_CC_END           = 0xC5   # server → Saturn: char N done
+UNET_CC_DONE          = 0xC6   # server → Saturn: no more chars (after list)
+UNET_CC_LIST_ITEM_NAME_LEN = 24    # truncated display name (null-terminated)
+UNET_CC_LIST_ITEM_SLUG_LEN = 16    # slug — same as filesystem-safe slug rules
+UNET_CC_CHUNK_DATA_MAX     = 120   # fits in 128-byte TX frame
+UNET_CC_MAX                = 64    # cap on # of custom characters streamed
+# Each character's binary payload (sent over CC_BEGIN/CHUNK/END):
+#   off  size  field
+#   0    32    name        (null-padded ASCII)
+#   32   32    creator     (null-padded ASCII)
+#   64   16    slug        (null-padded ASCII)
+#   80   2     reserved    (u16 BE — 0 for now)
+#   82   2     n_frames    (u16 BE — always 5)
+#   84   2     width       (u16 BE — always 16)
+#   86   2     height      (u16 BE — always 16)
+#   88   ...   pixels      (n_frames × W × H × 2 bytes ARGB-1555 BE)
+# = 88 + 5*16*16*2 = 2648 bytes per character.
+
 # Sentinel stage_id meaning "this match uses a streamed custom map".
 # When the server sees use_live_map=True and live_map_slug names a
 # valid .UTE in the editor's maps dir, it sends MAP_BEGIN/CHUNK/END
@@ -458,6 +487,109 @@ def build_map_chunk(chunk_idx: int, chunk_data: bytes) -> bytes:
 
 def build_map_end() -> bytes:
     return encode_frame(bytes([UNET_MAP_END]))
+
+
+# ----------------------------------------------------------------------
+# Phase B — Custom character (CC) listing + chunk streaming.
+# Mirrors the MAP_* protocol but over CC opcodes 0xC0..0xC6. Each
+# character's binary payload is 2648 bytes (5 frames × 16×16 × 2-byte
+# ARGB-1555 + 88-byte header). Chunks are CC_CHUNK_DATA_MAX bytes max
+# = 23 chunks per character at 120-byte chunks (last is 88 bytes).
+# ----------------------------------------------------------------------
+
+CC_HEADER_NAME_LEN    = 32
+CC_HEADER_CREATOR_LEN = 32
+CC_HEADER_SLUG_LEN    = 16
+CC_HEADER_RESERVED    = 2
+CC_HEADER_BYTES       = (CC_HEADER_NAME_LEN + CC_HEADER_CREATOR_LEN
+                         + CC_HEADER_SLUG_LEN + CC_HEADER_RESERVED + 6)
+                       # name + creator + slug + reserved + n_frames + W + H
+CC_FRAMES = 5
+CC_W = 16
+CC_H = 16
+CC_FRAME_BYTES = CC_W * CC_H * 2
+CC_PAYLOAD_BYTES = CC_HEADER_BYTES + CC_FRAMES * CC_FRAME_BYTES   # 2648
+
+
+def _ascii_pad(s: str, length: int) -> bytes:
+    """Encode `s` as ASCII (replacing non-ASCII with '?') and pad/
+    truncate to exactly `length` bytes, null-padded."""
+    raw = (s or "").encode("ascii", errors="replace")
+    if len(raw) > length:
+        raw = raw[:length]
+    return raw + b"\x00" * (length - len(raw))
+
+
+def cc_serialize(record: dict) -> bytes:
+    """Convert an editor JSON record (one custom character) into the
+    binary stream payload Saturn consumes.
+
+    Header layout (88 bytes BE):
+       0    32  name        ascii null-padded
+       32   32  creator     ascii null-padded
+       64   16  slug        ascii null-padded
+       80   2   reserved    u16 BE = 0
+       82   2   n_frames    u16 BE = 5
+       84   2   width       u16 BE = 16
+       86   2   height      u16 BE = 16
+       88+  pixels          5 × 16 × 16 × 2 bytes ARGB-1555 BE
+    Total 2648 bytes."""
+    out = bytearray(CC_PAYLOAD_BYTES)
+    out[0:32]  = _ascii_pad(record.get("name") or record.get("slug") or "", 32)
+    out[32:64] = _ascii_pad(record.get("creator") or "", 32)
+    out[64:80] = _ascii_pad(record.get("slug") or "", 16)
+    out[80:82] = struct.pack("!H", 0)
+    out[82:84] = struct.pack("!H", CC_FRAMES)
+    out[84:86] = struct.pack("!H", CC_W)
+    out[86:88] = struct.pack("!H", CC_H)
+    off = 88
+    frames = record.get("frames") or []
+    for fi in range(CC_FRAMES):
+        if fi < len(frames):
+            fr = frames[fi]
+        else:
+            fr = [0] * (CC_W * CC_H)
+        # Pixels stored as u16 ints; pack BE into the buffer.
+        for i, p in enumerate(fr[:CC_W * CC_H]):
+            v = int(p) & 0xFFFF
+            out[off + i*2]   = (v >> 8) & 0xFF
+            out[off + i*2+1] = v & 0xFF
+        off += CC_FRAME_BYTES
+    return bytes(out)
+
+
+def build_cc_list_resp(idx: int, slug: str, name: str) -> bytes:
+    """One list entry. idx is the linear character index 0..N-1; the
+    Saturn uses it as the request handle for CC_DOWNLOAD_REQ."""
+    return encode_frame(bytes([UNET_CC_LIST_RESP, idx & 0xFF])
+                        + _ascii_pad(slug, UNET_CC_LIST_ITEM_SLUG_LEN)
+                        + _ascii_pad(name, UNET_CC_LIST_ITEM_NAME_LEN))
+
+
+def build_cc_done() -> bytes:
+    """Sent after the last CC_LIST_RESP so Saturn knows enumeration
+    is complete."""
+    return encode_frame(bytes([UNET_CC_DONE]))
+
+
+def build_cc_begin(idx: int, total_size: int, num_chunks: int, crc: int) -> bytes:
+    return encode_frame(bytes([UNET_CC_BEGIN, idx & 0xFF])
+                        + struct.pack("!H", total_size & 0xFFFF)
+                        + bytes([num_chunks & 0xFF])
+                        + struct.pack("!H", crc & 0xFFFF))
+
+
+def build_cc_chunk(idx: int, chunk_idx: int, chunk_data: bytes) -> bytes:
+    if len(chunk_data) > UNET_CC_CHUNK_DATA_MAX:
+        raise ValueError(f"cc chunk too large: {len(chunk_data)}")
+    return encode_frame(bytes([UNET_CC_CHUNK,
+                               idx & 0xFF,
+                               chunk_idx & 0xFF,
+                               len(chunk_data) & 0xFF]) + chunk_data)
+
+
+def build_cc_end(idx: int) -> bytes:
+    return encode_frame(bytes([UNET_CC_END, idx & 0xFF]))
 
 
 # ----------------------------------------------------------------------
@@ -959,6 +1091,12 @@ class UtenyaaServer:
         self.editor_maps_dir = os.environ.get(
             "UTENYAA_EDITOR_MAPS_DIR",
             "/opt/utenyaa-editor/webapp/maps")
+        # Phase B — custom characters live in a sibling dir; the editor
+        # writes JSON files here, we transcode to the binary stream
+        # format on demand for Saturn distribution.
+        self.editor_custom_chars_dir = os.environ.get(
+            "UTENYAA_EDITOR_CUSTOM_CHARS_DIR",
+            "/opt/utenyaa-editor/webapp/custom_characters")
 
         # Lobby players (keyed by game_pid 0..3, mapped from client user_id)
         self.game_players: dict[int, UtenyaaPlayer] = {}
@@ -1235,6 +1373,82 @@ class UtenyaaServer:
         log.info("live map slug %r: no file found in %s",
                  slug, self.editor_maps_dir)
         return None
+
+    # ------------------------------------------------------------------
+    # Phase B — Custom character distribution
+    # ------------------------------------------------------------------
+
+    def _list_custom_characters(self) -> list[dict]:
+        """Enumerate the editor's custom_characters/ dir, returning a
+        list of {slug, name, creator, path} sorted by slug. Capped at
+        UNET_CC_MAX entries so the protocol can index by u8."""
+        d = self.editor_custom_chars_dir
+        out = []
+        try:
+            for name in sorted(os.listdir(d)):
+                if not name.lower().endswith(".json"):
+                    continue
+                full = os.path.join(d, name)
+                try:
+                    rec = json.loads(open(full, "rb").read())
+                except (OSError, ValueError):
+                    continue
+                slug = rec.get("slug") or name[:-5]
+                out.append({
+                    "slug":    slug,
+                    "name":    rec.get("name") or slug,
+                    "creator": rec.get("creator") or "",
+                    "path":    full,
+                    "record":  rec,
+                })
+                if len(out) >= UNET_CC_MAX:
+                    break
+        except OSError:
+            return []
+        return out
+
+    def _on_cc_list_req(self, c: ClientInfo) -> None:
+        """Saturn → server: please list custom characters. Send one
+        CC_LIST_RESP per character, then a CC_DONE sentinel."""
+        chars = self._list_custom_characters()
+        log.info("CC_LIST_REQ from %s — sending %d entries",
+                 c.username, len(chars))
+        for idx, ch in enumerate(chars):
+            c.send_raw(build_cc_list_resp(idx, ch["slug"], ch["name"]))
+        c.send_raw(build_cc_done())
+
+    def _on_cc_download_req(self, c: ClientInfo, idx: int) -> None:
+        """Saturn → server: please stream char `idx` (the index from
+        the most recent list). Sends BEGIN + chunks + END. Trusts the
+        Saturn to request indices it just received."""
+        chars = self._list_custom_characters()
+        if not 0 <= idx < len(chars):
+            log.warning("CC_DOWNLOAD_REQ from %s: bad idx %d (count=%d)",
+                        c.username, idx, len(chars))
+            return
+        rec = chars[idx]["record"]
+        try:
+            payload = cc_serialize(rec)
+        except Exception as e:
+            log.warning("CC serialize failed for %s: %s",
+                        chars[idx]["slug"], e)
+            return
+        crc = crc16_ccitt_false(payload)
+        chunks = []
+        for off in range(0, len(payload), UNET_CC_CHUNK_DATA_MAX):
+            chunks.append(payload[off:off + UNET_CC_CHUNK_DATA_MAX])
+        if len(chunks) > 255:
+            log.warning("CC payload too large for %s (%d chunks)",
+                        chars[idx]["slug"], len(chunks))
+            return
+        log.info("CC_DOWNLOAD_REQ from %s: idx=%d slug=%s "
+                 "(%d bytes / %d chunks / crc=%04X)",
+                 c.username, idx, chars[idx]["slug"],
+                 len(payload), len(chunks), crc)
+        c.send_raw(build_cc_begin(idx, len(payload), len(chunks), crc))
+        for ci, cd in enumerate(chunks):
+            c.send_raw(build_cc_chunk(idx, ci, cd))
+        c.send_raw(build_cc_end(idx))
 
     def _stream_live_map_to_in_game_clients(self, data: bytes) -> None:
         """Send MAP_BEGIN, MAP_CHUNK[*], MAP_END to every authenticated
@@ -2372,6 +2586,11 @@ class UtenyaaServer:
             top = sorted(self.leaderboard.values(),
                          key=lambda e: (-e.get("wins", 0), -e.get("best_hp", 0)))[:10]
             c.send_raw(build_leaderboard_data(top))
+        elif op == UNET_CC_LIST_REQ:
+            self._on_cc_list_req(c)
+        elif op == UNET_CC_DOWNLOAD_REQ and len(payload) >= 2:
+            idx = payload[1]
+            self._on_cc_download_req(c, idx)
         else:
             # unknown opcode — ignore
             pass
