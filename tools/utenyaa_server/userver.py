@@ -317,14 +317,16 @@ def build_stage_vote_tally(tally: list) -> bytes:
 def build_game_start(seed: int, my_id: int, stage: int, player_count: int,
                      match_seconds: int, crates: list,
                      char_roster: list = None) -> bytes:
-    """char_roster, if provided, is a list of (pid, char_id) pairs for
-    every player in the match. Appended after the crate array so the
-    Saturn can rebuild game_roster directly from authoritative server
-    pid→char mappings instead of relying on lobby_state's synthetic
-    P2 ids (id=100+offset) which don't match the in-game pid space.
-    Operator-reported "P2 local co-op got the character selected for
-    player 1" was caused by Saturn falling back to controller-pid as
-    the char index for P2 because lobby_players[].id never matched."""
+    """char_roster, if provided, is a list of (pid, char_id, name)
+    triples for every player in the match. Appended after the crate
+    array so the Saturn can rebuild game_roster directly from
+    authoritative server pid→char→name mappings instead of relying
+    on lobby_state's synthetic P2 ids (id=100+offset) which don't
+    match the in-game pid space.
+
+    Wire format per entry (length-prefixed name):
+        [pid:1][char_id:1][name_len:1][name:N]
+    """
     payload = bytes([UNET_GAME_START])
     payload += struct.pack("!I", seed & 0xFFFFFFFF)
     payload += bytes([my_id & 0xFF, stage & 0xFF, player_count & 0xFF])
@@ -334,13 +336,17 @@ def build_game_start(seed: int, my_id: int, stage: int, player_count: int,
         payload += bytes([c["slot"] & 0xFF])
         payload += struct.pack("!iii", _signed32(c["x"]), _signed32(c["y"]), _signed32(c["z"]))
         payload += bytes([c["flags"] & 0xFF])
-    # Optional roster extension. Older Saturn builds will stop parsing
-    # at the end of the crate list and use the lobby-derived roster
-    # (broken for P2 but harmless). New builds parse this and override.
+    # Roster extension. Without name, the Saturn's post-match Z
+    # overlay (lobby.c:draw_z_overlay) showed an empty-string winner
+    # because game_roster entries created by char_roster id-merge
+    # had no name field populated. Operator-reported: "Z overlay
+    # shows a blank name third line as the winner."
     if char_roster:
         payload += bytes([len(char_roster) & 0xFF])
-        for pid, char_id in char_roster:
-            payload += bytes([pid & 0xFF, char_id & 0xFF])
+        for pid, char_id, name in char_roster:
+            name_bytes = (name or "").encode("utf-8")[:USERNAME_MAX_LEN]
+            payload += bytes([pid & 0xFF, char_id & 0xFF, len(name_bytes) & 0xFF])
+            payload += name_bytes
     return encode_frame(payload)
 
 
@@ -2017,11 +2023,9 @@ class UtenyaaServer:
         # P1 and P2 character_ids each). Saturn uses this to
         # initialize game_roster directly instead of relying on
         # lobby_players which has synthetic P2 ids.
-        char_roster = [(pid, p.character_id)
+        char_roster = [(pid, p.character_id, p.name)
                        for pid, p in self.game_players.items()]
-        log.info("GAME_START char_roster: %s",
-                 [(pid, p.character_id, p.name)
-                  for pid, p in self.game_players.items()])
+        log.info("GAME_START char_roster: %s", char_roster)
         for cc in self.clients.values():
             if not cc.authenticated or not cc.in_game:
                 continue

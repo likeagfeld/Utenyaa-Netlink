@@ -298,6 +298,9 @@ static void on_game_start(const uint8_t* p, int len)
         }
         g_net.crate_count = cc;
     }
+    /* Pre-populate from lobby_players as a fallback for old servers
+     * that don't send the char_roster extension. New servers always
+     * send it and we overwrite below. */
     g_net.game_roster_count = g_net.lobby_count;
     for (i = 0; i < g_net.lobby_count; i++) {
         g_net.game_roster[i].id = g_net.lobby_players[i].id;
@@ -305,39 +308,71 @@ static void on_game_start(const uint8_t* p, int len)
         g_net.game_roster[i].active = g_net.lobby_players[i].active;
         g_net.game_roster[i].character_id = g_net.lobby_players[i].character_id;
     }
-    /* Optional GAME_START roster extension. The lobby-derived roster
-     * above uses lobby_players[].id which for P2 co-op slots is a
-     * SYNTHETIC id (100+offset) that doesn't match the in-game pid
-     * (allocated in _start_game and announced via LOCAL_PLAYER_ACK).
-     * Player::Draw looks up by `controller == game_roster[i].id`,
-     * so without this extension P2's render falls through to the
-     * controller-pid fallback (charIdx = controller) and ends up
-     * showing the same sprite as P1 if both happen to map to the
-     * same fallback. New servers append a real pid→char_id list
-     * after the crate array; parse it and OVERWRITE the relevant
-     * roster entries with the authoritative server pids. */
+    /* GAME_START roster extension (name-bearing form). Wire format
+     * per entry: [pid:1][char_id:1][name_len:1][name:N]. When
+     * present, REBUILD game_roster from scratch instead of merging
+     * by id — the merge approach was leaving empty-name slots when
+     * char_roster pids didn't match lobby_players' user_id-space
+     * ids (operator-reported: post-match Z overlay showed "blank
+     * name third line as the winner"). Rebuild guarantees every
+     * entry has a name and the post-match path lookup-by-pid lands
+     * on the right player. */
     if (off < len) {
         int rcount = p[off++];
         if (rcount > UNET_MAX_PLAYERS) rcount = UNET_MAX_PLAYERS;
-        /* Each pair is 2 bytes (pid + char_id). */
-        for (i = 0; i < rcount && off + 2 <= len; i++) {
-            uint8_t pid     = p[off++];
-            uint8_t char_id = p[off++];
-            /* Find or replace the roster entry for this pid. */
-            int slot = -1;
-            int j;
-            for (j = 0; j < g_net.game_roster_count; j++) {
-                if (g_net.game_roster[j].id == pid) { slot = j; break; }
+        /* Detect new wire format by scanning the FIRST entry's
+         * length prefix to see if the bytes that follow add up to
+         * the rest of the payload. If the first byte after pid+
+         * char_id is a plausible name_len and there are at least
+         * that many bytes left, treat as new format. Otherwise
+         * fall back to legacy 2-byte-per-entry merge.
+         *
+         * In practice, new server only ever ships new format, but
+         * the detection lets a Saturn built against the new
+         * protocol still talk to a legacy server (just falls back
+         * to the lobby-derived roster's broken-name behaviour). */
+        bool new_format = (rcount > 0 && off + 3 <= len
+                           && p[off + 2] <= UNET_MAX_NAME
+                           && off + 3 + p[off + 2] <= len);
+        if (new_format) {
+            /* Rebuild from scratch. */
+            g_net.game_roster_count = 0;
+            for (i = 0; i < rcount && off + 3 <= len; i++) {
+                uint8_t pid     = p[off++];
+                uint8_t char_id = p[off++];
+                uint8_t nlen    = p[off++];
+                if (nlen > UNET_MAX_NAME) nlen = UNET_MAX_NAME;
+                if (off + nlen > len) break;
+                int slot = g_net.game_roster_count++;
+                g_net.game_roster[slot].id            = pid;
+                g_net.game_roster[slot].active        = true;
+                g_net.game_roster[slot].character_id  = char_id;
+                int j;
+                for (j = 0; j < nlen; j++)
+                    g_net.game_roster[slot].name[j] = (char)p[off + j];
+                g_net.game_roster[slot].name[nlen] = '\0';
+                off += nlen;
             }
-            if (slot < 0 && g_net.game_roster_count < UNET_MAX_PLAYERS) {
-                slot = g_net.game_roster_count++;
-                g_net.game_roster[slot].name[0] = '\0';
-                g_net.game_roster[slot].active  = true;
-            }
-            if (slot >= 0) {
-                g_net.game_roster[slot].id = pid;
-                g_net.game_roster[slot].active = true;
-                g_net.game_roster[slot].character_id = char_id;
+        } else {
+            /* Legacy 2-byte form — merge by pid (round-3 behaviour). */
+            for (i = 0; i < rcount && off + 2 <= len; i++) {
+                uint8_t pid     = p[off++];
+                uint8_t char_id = p[off++];
+                int slot = -1;
+                int j;
+                for (j = 0; j < g_net.game_roster_count; j++) {
+                    if (g_net.game_roster[j].id == pid) { slot = j; break; }
+                }
+                if (slot < 0 && g_net.game_roster_count < UNET_MAX_PLAYERS) {
+                    slot = g_net.game_roster_count++;
+                    g_net.game_roster[slot].name[0] = '\0';
+                    g_net.game_roster[slot].active  = true;
+                }
+                if (slot >= 0) {
+                    g_net.game_roster[slot].id = pid;
+                    g_net.game_roster[slot].active = true;
+                    g_net.game_roster[slot].character_id = char_id;
+                }
             }
         }
     }
