@@ -45,6 +45,7 @@ extern saturn_uart16550_t g_uart;
 
 typedef enum {
     CCD_INIT = 0,
+    CCD_WAITING_AUTH,    /* wait for unet_state >= UNET_STATE_LOBBY before sending CC_LIST_REQ */
     CCD_WAITING_LIST,
     CCD_DOWNLOADING,
     CCD_DONE,
@@ -146,6 +147,12 @@ static void ccd_register_sprites(void)
 #define CCD_LIST_TIMEOUT_FRAMES   600   /* 10s @ 60fps */
 #define CCD_DL_TIMEOUT_FRAMES     900   /* 15s per character */
 #define CCD_REREQUEST_FRAMES      300   /* re-send DOWNLOAD_REQ if stalled */
+/* Auth wait: server drops every opcode that arrives before the client
+ * is authenticated (userver.py: `if not c.authenticated: return`).
+ * We must wait for unet_state to reach LOBBY (set on WELCOME) before
+ * sending CC_LIST_REQ. 600 frames = 10s; auth normally completes in
+ * ~1 s but allow generous slack for slow modem ack. */
+#define CCD_AUTH_TIMEOUT_FRAMES   600
 
 static void ccd_send_list_req(void)
 {
@@ -180,7 +187,18 @@ void cc_download_init(void)
     s_dl_idx = 0;
     s_dl_request_timer = 0;
     s_list_wait_timer = 0;
-    s_a_held_prev = 0;
+    /* Initialize s_a_held_prev = 1 (treat A as already held). The user
+     * arrived at this screen by pressing A on the title-menu's
+     * "Download Characters" button — that A is still held when we
+     * land here on frame 1. With prev=0 the rising-edge detector
+     * would fire immediately on entry (wrong on WAITING_LIST since
+     * the gate ignores it) AND, more critically, would leave prev=1
+     * for the rest of the screen so the operator's A-press at DONE/
+     * FAILED never produces a fresh rising edge — operator-reported
+     * "pressing A to return to title does nothing." Initializing
+     * to 1 forces a release-then-press cycle, which the operator
+     * naturally does the first time they tap A on the FAILED screen. */
+    s_a_held_prev = 1;
     s_payload_count = 0;
     for (i = 0; i < CCD_MAX; i++) s_payload_valid[i] = false;
     /* Don't clear s_sprite_id_for_custom on re-entry — sprite slots
@@ -191,9 +209,21 @@ void cc_download_init(void)
      * we keep the original slots until reboot. */
 
     unet_cc_reset_state();
-    /* Nudge into WAITING_LIST immediately. */
-    ccd_send_list_req();
-    s_state = CCD_WAITING_LIST;
+    /* DON'T send CC_LIST_REQ yet. The server discards every opcode
+     * that arrives before the client is authenticated:
+     *
+     *   userver.py:2359   if not c.authenticated: return
+     *
+     * cc_download_init runs at CONNECT_STAGE_CONNECTED (right after
+     * unet_on_connected sends MSG_CONNECT) — auth has NOT yet
+     * completed (WELCOME → SET_USERNAME → WELCOME-back round-trip
+     * takes ~1 s). Sending CC_LIST_REQ here gets dropped silently;
+     * the Saturn-side state machine then waits 10 s for a list
+     * response that will never come and trips CCD_FAILED, producing
+     * the operator-reported "Download Failed" with no obvious cause.
+     * Wait for unet_get_state() == UNET_STATE_LOBBY (set on WELCOME
+     * receipt) before sending. */
+    s_state = CCD_WAITING_AUTH;
     jo_clear_screen();
 }
 
@@ -201,9 +231,28 @@ void cc_download_tick(void)
 {
     switch (s_state) {
     case CCD_INIT:
-        ccd_send_list_req();
-        s_state = CCD_WAITING_LIST;
+        s_state = CCD_WAITING_AUTH;
         break;
+
+    case CCD_WAITING_AUTH: {
+        /* Wait for auth handshake to complete on the network side.
+         * unet_get_state() returns UNET_STATE_LOBBY once the server's
+         * WELCOME has been received and the client is authenticated. */
+        s_list_wait_timer++;
+        unet_state_t st = unet_get_state();
+        if (st == UNET_STATE_LOBBY ||
+            st == UNET_STATE_PLAYING)
+        {
+            ccd_send_list_req();
+            s_state = CCD_WAITING_LIST;
+            s_list_wait_timer = 0;
+        } else if (s_list_wait_timer > CCD_AUTH_TIMEOUT_FRAMES) {
+            /* Auth never completed — surface as FAILED so operator
+             * gets a recognizable error path back to title. */
+            s_state = CCD_FAILED;
+        }
+        break;
+    }
 
     case CCD_WAITING_LIST: {
         const unet_state_data_t* nd = unet_get_data();
@@ -303,6 +352,9 @@ void cc_download_draw(void)
     switch (s_state) {
     case CCD_INIT:
         snprintf(status, sizeof(status), "%-30s", "Initializing...");
+        break;
+    case CCD_WAITING_AUTH:
+        snprintf(status, sizeof(status), "%-30s", "Authenticating...");
         break;
     case CCD_WAITING_LIST:
         snprintf(status, sizeof(status), "%-30s", "Listing characters...");

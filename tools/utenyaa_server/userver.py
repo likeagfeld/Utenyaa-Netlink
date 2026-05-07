@@ -68,7 +68,7 @@ AUTH_TIMEOUT = 5.0
 
 MAX_PLAYERS = 4         # max in-match player count (game_players cap)
 MAX_LOBBY   = 8         # max lobby connections (first 4 to ready play next match)
-MAX_CHARACTERS = 12
+MAX_CHARACTERS = 64     # 5 built-in + up to UNET_CC_MAX (64) custom; server stores ID transparently
 MAX_CRATES = 16
 STAGE_COUNT = 4
 STAGE_NAMES = ["Island", "Cross", "Valley", "Railway"]
@@ -1838,12 +1838,22 @@ class UtenyaaServer:
             # the actual pid (NOT 0xFF) so the client's myPlayerID2
             # gets populated before GAME_START fires.
             cc.local_pids = []
-            for p2_name in cc.local_names:
+            local_chars = getattr(cc, "local_characters", [])
+            for j, p2_name in enumerate(cc.local_names):
                 if next_pid >= MAX_PLAYERS: break
                 cc.local_pids.append(next_pid)
+                # Use the lobby-assigned character if available; else
+                # fall back to the deterministic (pid+5) pick used by
+                # earlier alpha builds. Operator-reported: "character
+                # color selected at lobby is not what you get in game"
+                # — caused by ALWAYS using pid+5 here, ignoring the
+                # lobby selection. local_characters is now populated
+                # at ADD_LOCAL_PLAYER auto-assign time.
+                p2_char = (local_chars[j] if j < len(local_chars)
+                           and local_chars[j] != 0xFF
+                           else (next_pid + 5) % MAX_CHARACTERS)
                 self.game_players[next_pid] = UtenyaaPlayer(
-                    next_pid, p2_name or (cc.username + "-2"),
-                    (next_pid + 5) % MAX_CHARACTERS)
+                    next_pid, p2_name or (cc.username + "-2"), p2_char)
                 cc.send_raw(build_local_player_ack(next_pid))
                 next_pid += 1
         for bot in self.bots:
@@ -2038,6 +2048,25 @@ class UtenyaaServer:
         if not rewound:
             return False
 
+        # Pre-fetch active crate positions. Crates physically block
+        # bullets in the client sim — the bullet collides with the
+        # crate model and triggers an explosion (or just stops).
+        # Without server-side awareness of crates, the lag-comp path
+        # walked straight THROUGH a crate sitting between two players
+        # and registered an immediate hit on the player on the far
+        # side. Operator-reported on Dansfield: "I fire at the bomb
+        # in the center, the bullet hasn't even reached the bomb yet
+        # and the opposite player takes damage." Treat each active
+        # crate as a blocker with the same world-unit radius as the
+        # cone_radius used for player hits, so the path-walk aborts
+        # the hit on the FIRST crate or player encountered (whichever
+        # is closer along the path), matching client-side visuals.
+        crate_blockers = []
+        if self.match is not None:
+            for crate in self.match.crates:
+                if not crate.active: continue
+                crate_blockers.append((crate.x >> 16, crate.y >> 16))
+
         # Bullet position in fxp 16.16; advance by `step_units` world
         # units per iteration. dx,dy are fxp 16.16 with magnitude
         # 65536 (unit vector), so dx*step_units is fxp 16.16 of
@@ -2050,6 +2079,24 @@ class UtenyaaServer:
         for i in range(n_steps):
             bx_w = pos_x >> 16
             by_w = pos_y >> 16
+            # Crate-blocking check FIRST. If a crate is within
+            # cone_radius of the current bullet step, the bullet has
+            # logically "hit the crate" and the server stops walking
+            # forward — no player damage is registered on this fire.
+            # The visible crate-explosion / pickup-spawn is handled by
+            # the client's local bullet-vs-crate sim plus the server's
+            # crate_destroy / crate_spawn broadcast pair on pickup.
+            blocked = False
+            for cx, cy in crate_blockers:
+                ddx = cx - bx_w
+                ddy = cy - by_w
+                if ddx * dx + ddy * dy < 0:
+                    continue
+                if ddx * ddx + ddy * ddy <= hit_r_sq:
+                    blocked = True
+                    break
+            if blocked:
+                return False
             for pid, p, tx_w, ty_w in rewound:
                 ddx = tx_w - bx_w
                 ddy = ty_w - by_w
@@ -2330,6 +2377,27 @@ class UtenyaaServer:
             positive_keys = [k for k in self.clients.keys() if k >= 0]
             c.user_id = (max(positive_keys) + 1) if positive_keys else 1
             c.authenticated = True
+            # Auto-assign a unique built-in character so the lobby
+            # sprite preview has something to render immediately and
+            # the operator never has to remember to L/R-cycle before
+            # readying. Pick the lowest 0..MAX_PLAYERS-1 not currently
+            # taken by another authenticated client or bot. If all
+            # are taken, fall back to a deterministic mod-N pick on
+            # user_id so the picker still has a starting point.
+            BUILTIN_COUNT = 5  # CHARS.PAK ships 5
+            taken = {cc.character_id for cc in self.clients.values()
+                     if cc is not c and cc.authenticated
+                     and cc.character_id != 0xFF}
+            taken.update(b.character_id for b in self.bots
+                         if b.character_id != 0xFF)
+            assigned = 0xFF
+            for cid in range(BUILTIN_COUNT):
+                if cid not in taken:
+                    assigned = cid
+                    break
+            if assigned == 0xFF:
+                assigned = c.user_id % BUILTIN_COUNT
+            c.character_id = assigned
             # Remove the pre-auth negative-key slot so this ClientInfo
             # isn't present in self.clients twice (once as negative,
             # once as user_id) — LOBBY_STATE would otherwise double-
@@ -2342,8 +2410,8 @@ class UtenyaaServer:
             self.clients[c.user_id] = c
             self.uuid_map[c.uuid] = c.user_id
             c.send_raw(build_welcome(c.user_id, c.uuid, c.username, back=False))
-            log.info("WELCOME → %s uid=%d uuid=%s name=%r",
-                     c.address[0], c.user_id, c.uuid[:8], c.username)
+            log.info("WELCOME → %s uid=%d uuid=%s name=%r char=%d",
+                     c.address[0], c.user_id, c.uuid[:8], c.username, assigned)
             self._record_join(c.username, c.address)
             self._broadcast_lobby()
             return
@@ -2563,6 +2631,34 @@ class UtenyaaServer:
             name, _ = read_lp_string(payload, 1)
             if name:
                 c.local_names.append(name[:USERNAME_MAX_LEN])
+                # Auto-assign a unique built-in character to this P2
+                # slot — same rationale as the P1 auto-assign on
+                # auth: lobby preview must have a sprite to render
+                # without requiring the user to L/R-cycle first.
+                # Operator-reported "2nd player local coop player does
+                # not get assigned a character sprite/color in lobby."
+                BUILTIN_COUNT = 5
+                taken = {cc.character_id for cc in self.clients.values()
+                         if cc.authenticated and cc.character_id != 0xFF}
+                taken.update(b.character_id for b in self.bots
+                             if b.character_id != 0xFF)
+                # Also exclude characters already in use by any
+                # existing P2 slot (own client and others).
+                for cc in self.clients.values():
+                    if not cc.authenticated: continue
+                    for ch in getattr(cc, "local_characters", []):
+                        if ch != 0xFF: taken.add(ch)
+                p2_assigned = 0xFF
+                for cid in range(BUILTIN_COUNT):
+                    if cid not in taken:
+                        p2_assigned = cid
+                        break
+                if p2_assigned == 0xFF:
+                    # All built-ins taken; pick deterministically.
+                    p2_assigned = (c.user_id + len(c.local_names)) % BUILTIN_COUNT
+                if not hasattr(c, "local_characters"):
+                    c.local_characters = []
+                c.local_characters.append(p2_assigned)
                 # pid assigned at match start
                 c.send_raw(build_local_player_ack(0xFF))
                 self._broadcast_lobby()

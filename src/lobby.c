@@ -118,6 +118,26 @@ static uint8_t next_available_character(uint8_t from, int direction)
  * Lifecycle
  *============================================================================*/
 
+void lobby_reset_edge_state(void)
+{
+    /* Stomp the per-screen edge-detect flags so a still-held L/R/A/X
+     * carrying over from gameplay doesn't get mistaken for a fresh
+     * edge in the first lobby_input tick. Operator-reported on
+     * post-match return: "L/R triggers do not cycle through character
+     * sprites." Holding L on the gameplay frame leaves g_ltrig_pressed
+     * = true; the next lobby_input sees JO_KEY_L pressed AND
+     * g_ltrig_pressed == true, so the inner branch (which actually
+     * sends CHARACTER_SELECT) never fires. */
+    g_ltrig_pressed = false;
+    g_rtrig_pressed = false;
+    g_x_pressed = false;
+    g_z_held = false;
+    g_z_was_held = false;
+    g_z_page_timer = 0;
+    g_z_page = 0;
+    g_z_last_drawn_page = -1;
+}
+
 void lobby_init(void)
 {
     g_z_held = false;

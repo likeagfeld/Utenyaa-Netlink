@@ -231,6 +231,21 @@ namespace UI
             else
             {
                 ProcessInput();
+                /* If ProcessInput just transitioned us into an online
+                 * flow (Play Online / Download Characters / etc.), the
+                 * online screen's init has already cleared NBG0 and
+                 * written its own initial frame. Drawing the title
+                 * menu over the top here leaves stale title-screen
+                 * cells visible behind every connecting/lobby/download
+                 * frame — operator-reported "bleed over text from the
+                 * title menu mixed in" on the dialing screen. Bail
+                 * before the menu redraw when an online screen is
+                 * active. unet_glue_is_online_screen_active is
+                 * extern "C" — see net/utenyaa_main_glue.h. */
+                if (g_Game.isOnlineMode && unet_glue_is_online_screen_active())
+                {
+                    return;
+                }
                 jo_clear_screen();
                 screens[currentScreen]->HandleMessages(Messages::Draw());
                 if (Settings::IsActive) jo_clear_screen();

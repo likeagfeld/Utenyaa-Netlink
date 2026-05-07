@@ -18,6 +18,7 @@
 #include "net/utenyaa_protocol.h"   /* UNET_STAGE_STREAMED */
 #include "map_pick.h"
 #include "cc_download.h"
+#include "lobby.h"                  /* lobby_reset_edge_state for post-match return */
 #include "utenyaa_online_bridge.hpp"
 #include "Entities/Player.hpp"
 #include "Entities/Bullet.hpp"
@@ -78,6 +79,17 @@ int main()
 {
 	jo_core_init(JO_COLOR_Black);
 	slDynamicFrame(1);
+
+	// Hide NBG1 (the title-logo plane) until LOGO.TGA has been
+	// decoded into VRAM. Without this, the operator sees ~3 seconds
+	// of uninitialized VRAM as garbled pixelated noise on the title
+	// graphic while the boot sequence loads sounds + PAKs from CD —
+	// jo_core_init enables NBG1ON by default but NBG1 VRAM still
+	// holds the garbage left by the BIOS at this point. ShowLogo
+	// is called again right after jo_set_background_8bits_sprite
+	// finishes the decode so the visible flicker window collapses
+	// to one frame instead of three seconds.
+	Helpers::HideLogo();
 	Objects::Terrain::InitColliders();
 	IMessageHandler::Init();
 
@@ -105,6 +117,9 @@ int main()
 	jo_set_tga_palette_handling(nullptr);
 	jo_set_background_8bits_sprite(&bg, titleScreen.id, false);
 	jo_free_img(&bg);
+
+	// LOGO.TGA is now in VRAM; safe to re-enable NBG1.
+	Helpers::ShowLogo();
 
 	// Load sounds
 	PoneSound::Sound::LoadPcm((char*)"BOMB.PCM", PoneSound::PCMBitDepth::PCM8, 15360);
@@ -192,6 +207,13 @@ int main()
 			g_Game.input.pressedStart = false;
 			g_Game.input.pressedLT = false;
 			g_Game.input.pressedRT = false;
+			/* Reset lobby's per-screen edge-detect flags too — operator-
+			 * reported: "L/R triggers do not cycle through character
+			 * sprites" on post-match return. Without this, a held L
+			 * carrying over from gameplay leaves the lobby's
+			 * g_ltrig_pressed sticky and the inner CHARACTER_SELECT
+			 * send never fires. */
+			lobby_reset_edge_state();
 			/* Pull fresh leaderboard so wins/kills/deaths from the
 			 * just-ended match show up when the user holds Z. lobby_init
 			 * only requests leaderboard ONCE on the first CONNECTING →
