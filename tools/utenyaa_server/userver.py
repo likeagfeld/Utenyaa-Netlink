@@ -147,6 +147,10 @@ UNET_CLIENT_PICKUP_CRATE = 0x21
 UNET_CLIENT_FIRE_BULLET_P2 = 0x27
 UNET_CLIENT_DROP_MINE_P2   = 0x28
 UNET_CLIENT_THROW_BOMB_P2  = 0x29
+# Post-auth username rename. Saturn sends after the download-then-
+# name-entry flow so the user's real name replaces the placeholder
+# "DL" without dropping the modem connection.
+UNET_CLIENT_RENAME         = 0x2A
 UNET_STAGE_VOTE = 0x22
 UNET_STAGE_LOADED_ACK = 0x23
 UNET_CLIENT_DBG_LOG   = 0x25
@@ -2702,6 +2706,28 @@ class UtenyaaServer:
             x, y, z, dx, dy, dz = struct.unpack("!iiiiii", payload[2:26])
             eid = self.match.alloc_entity_id()
             self._broadcast(build_bomb_spawn(eid, shooter_pid, x, y, z, dx, dy, dz))
+        elif op == UNET_CLIENT_RENAME and len(payload) >= 2:
+            # Post-auth rename. Payload: [op][name_len:1][name:N].
+            # Operator-requested seamless transition from the
+            # post-Download-Characters name-entry screen straight
+            # into the lobby without re-dialing — the modem +
+            # auth stay alive while c.username gets updated.
+            nlen = payload[1]
+            if 2 + nlen > len(payload): return
+            new_name = payload[2:2 + nlen].decode("utf-8", "replace").strip()[:USERNAME_MAX_LEN]
+            if not new_name:
+                return
+            # Allow duplicates by appending a digit if someone else
+            # is already using the requested name.
+            existing = {cc.username for cc in self.clients.values()
+                        if cc is not c and cc.authenticated}
+            if new_name in existing:
+                # Soft fallback: append the user_id to make unique.
+                new_name = f"{new_name[:USERNAME_MAX_LEN-2]}_{c.user_id}"
+            old_name = c.username
+            c.username = new_name
+            log.info("RENAME from %s — %r → %r", c.address[0], old_name, new_name)
+            self._broadcast_lobby()
         elif op == UNET_CLIENT_PICKUP_CRATE and len(payload) >= 2:
             if self.match is None: return
             slot = payload[1]

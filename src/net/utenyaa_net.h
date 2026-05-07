@@ -400,6 +400,14 @@ void unet_send_remove_local_player(void);
 /* Lifecycle */
 void unet_send_disconnect(void);
 
+/* Post-auth username rename. Used by the post-Download-Characters
+ * name-entry flow so the user can replace the placeholder "DL"
+ * with their real name without dropping the modem connection.
+ * Payload: [name_len:1][name:N] — same shape as MSG_SET_USERNAME
+ * but on opcode 0x2A which the server treats as a rename instead
+ * of an auth handshake. */
+void unet_send_rename(const char* name);
+
 /* Free-form debug log → server journal. Cheap one-shot ASCII trace
  * for diagnosing client-side crashes that prevent on-screen output
  * from being read off the TV. Server logs the text at INFO level. */

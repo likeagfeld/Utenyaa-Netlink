@@ -489,12 +489,17 @@ void lobby_draw(void)
      * lets put player names and their sprites on every other line so
      * that we dont have overlap anymore."
      *
-     * Per slot i (0..3): name on row 7+i*2, sprite straddles rows
-     * 7+i*2 and 8+i*2 (16 px tall = exactly 2 text rows). 4 player
-     * slots × 2 rows = rows 7-14. PRESS START at row 17 still clear. */
+     * Per slot i (0..3): name on row 8+i*2, sprite straddles rows
+     * 8+i*2 and 9+i*2 (16 px tall = exactly 2 text rows). 4 player
+     * slots × 2 rows = rows 8-15. PRESS START at row 17 still clear.
+     *
+     * Header on row 6, gap on row 7 between header and first slot —
+     * operator-requested layout: "first line with name and ready
+     * status and sprite start all on line 8, then next player and
+     * sprite on line 10, etc." */
     font_draw("#  NAME             CHAR STATUS  SPR ", FONT_X(1), FONT_Y(6), 500);
     for (i = 0; i < UNET_MAX_LOBBY; i++) {
-        const int name_row = 7 + i * 2;
+        const int name_row = 8 + i * 2;
         if (i < nd->lobby_count && nd->lobby_players[i].active) {
             const unet_lobby_player_t* lp = &nd->lobby_players[i];
             char marker = (lp->id == nd->my_user_id) ? '>' : ' ';

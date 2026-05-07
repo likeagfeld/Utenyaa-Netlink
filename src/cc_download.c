@@ -35,6 +35,7 @@
 #include "net/utenyaa_main_glue.h"
 #include "net/saturn_uart16550.h"
 #include "net/modem.h"
+#include "name_entry.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -57,6 +58,7 @@ static int  s_dl_idx;             /* current char being requested */
 static int  s_dl_request_timer;   /* frames since we last sent a request */
 static int  s_list_wait_timer;    /* frames since CC_LIST_REQ sent */
 static int  s_a_held_prev;        /* edge-detect on A at DONE/FAILED */
+static int  s_b_held_prev;        /* edge-detect on B at DONE/FAILED */
 
 /* Phase D — VDP1 sprite-slot registration. The Phase D commit had
  * bumped JO_MAX_SPRITE 100→130 to make room for customs, but the
@@ -209,6 +211,7 @@ void cc_download_init(void)
      * to 1 forces a release-then-press cycle, which the operator
      * naturally does the first time they tap A on the FAILED screen. */
     s_a_held_prev = 1;
+    s_b_held_prev = 1;
     s_payload_count = 0;
     for (i = 0; i < CCD_MAX; i++) s_payload_valid[i] = false;
     /* Don't clear s_sprite_id_for_custom on re-entry — sprite slots
@@ -366,22 +369,42 @@ void cc_download_tick(void)
 void cc_download_input(void)
 {
     bool a_now = jo_is_pad1_key_pressed(JO_KEY_A);
+    bool b_now = jo_is_pad1_key_pressed(JO_KEY_B);
     if ((s_state == CCD_DONE || s_state == CCD_FAILED)
         && a_now && !s_a_held_prev)
     {
-        /* Diagnostic: confirm A-press was actually detected as a
-         * rising edge on the DONE/FAILED screen. Operator-reported
-         * "pressing A to return to title does nothing" — if this
-         * line lands in the journal but the title-screen never
-         * appears, the bug is downstream of the disconnect. If
-         * this line never lands, the rising-edge gate is being
-         * defeated by held-A from menu entry. */
+        /* A press → continue to online play. Modem + auth are
+         * already alive (we just used them to download), so the
+         * cleanest path is straight into name entry: the user
+         * replaces the placeholder "DL" with their real name, the
+         * confirm sends a rename to the server, and then the
+         * normal lobby flow takes over WITHOUT re-dialing. */
         ccd_log(s_state == CCD_DONE
-                ? "CC_DBG A-press at DONE -> title"
-                : "CC_DBG A-press at FAILED -> title");
-        /* Disconnect cleanly + fresh boot back to title. Mirrors
-         * the lobby Y-disconnect path (lobby.c:186) so the modem
-         * + UART get torn down identically. */
+                ? "CC_DBG A at DONE -> NAME_ENTRY (online play)"
+                : "CC_DBG A at FAILED -> NAME_ENTRY (online play)");
+        jo_clear_screen();
+        g_Game.downloadCharsMode = false;
+        /* g_Game.isOnlineMode stays true — modem connection is
+         * preserved across the transition. */
+        g_Game.gameState = UGAME_STATE_NAME_ENTRY;
+        /* Use the blank init variant so the placeholder "DL" we set
+         * for the download dial doesn't pre-fill the entry — and
+         * neither does any "DL" that may have leaked into backup
+         * RAM in an earlier session if the user had ever confirmed
+         * the prefilled value. Operator-reported: "after I have
+         * downloaded the character and go to name entry, it is
+         * prefilled with DL for the name for some reason." */
+        nameEntry_init_blank();
+        s_state = CCD_INIT;
+    }
+    else if ((s_state == CCD_DONE || s_state == CCD_FAILED)
+             && b_now && !s_b_held_prev)
+    {
+        /* B press → disconnect cleanly + return to title (the old
+         * A behaviour). */
+        ccd_log(s_state == CCD_DONE
+                ? "CC_DBG B at DONE -> title (disconnect)"
+                : "CC_DBG B at FAILED -> title (disconnect)");
         unet_send_disconnect();
         modem_hangup(&g_uart);
         jo_clear_screen();
@@ -392,6 +415,7 @@ void cc_download_input(void)
         s_state = CCD_INIT;
     }
     s_a_held_prev = a_now ? 1 : 0;
+    s_b_held_prev = b_now ? 1 : 0;
 }
 
 void cc_download_draw(void)
@@ -456,12 +480,12 @@ void cc_download_draw(void)
          * (centered at col 7) overwrites only cols 7+ — operator-
          * reported "LiDownload Complete:..." artifact. */
         snprintf(status, sizeof(status), "%-30s", raw);
-        snprintf(progress, sizeof(progress), "%-30s", "Press A to return to title");
+        snprintf(progress, sizeof(progress), "%-30s", "A: Online Play   B: Title");
         break;
     }
     case CCD_FAILED:
         snprintf(status, sizeof(status), "%-30s", "Download FAILED");
-        snprintf(progress, sizeof(progress), "%-30s", "Press A to return to title");
+        snprintf(progress, sizeof(progress), "%-30s", "A: Online Play   B: Title");
         break;
     }
 

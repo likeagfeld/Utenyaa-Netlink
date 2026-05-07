@@ -12,6 +12,7 @@
 #include <jo/jo.h>
 #include "name_entry.h"
 #include "connecting.h"
+#include "lobby.h"
 #include "font.h"
 #include "net/utenyaa_game.h"
 #include "net/utenyaa_net.h"
@@ -136,6 +137,29 @@ void nameEntry_init(void)
     g_Game.input.pressedRight = true;
 }
 
+void nameEntry_init_blank(void)
+{
+    /* Same setup as nameEntry_init but skips both the backup-RAM
+     * load AND the playerName-driven pre-population. The buffer
+     * starts truly empty so the placeholder "DL" written into
+     * playerName by unet_glue_enter_char_download (and possibly
+     * persisted to backup if the user previously confirmed the
+     * prefilled value) doesn't bleed into this entry. */
+    jo_clear_screen();
+    g_bkp_load_status = 0;
+    g_Game.playerName[0] = '\0';
+    g_name_buf[0] = '\0';
+    g_name_len = 0;
+    g_cursor_row = 0;
+    g_cursor_col = 0;
+    g_Game.input.pressedABC = true;
+    g_Game.input.pressedStart = true;
+    g_Game.input.pressedUp = true;
+    g_Game.input.pressedDown = true;
+    g_Game.input.pressedLeft = true;
+    g_Game.input.pressedRight = true;
+}
+
 void nameEntry_input(void)
 {
     int rowLen;
@@ -217,8 +241,26 @@ void nameEntry_input(void)
                     }
 
                     g_Game.isOnlineMode = true;
-                    g_Game.gameState = UGAME_STATE_CONNECTING;
-                    connecting_init();
+                    /* If we're already authenticated (post-download
+                     * flow), skip the dial — just send a rename to
+                     * update the server and drop straight into the
+                     * lobby. Operator-requested seamless transition:
+                     * "if they press A [at download done], it goes
+                     * to name entry screen -> lobby screen flow,
+                     * etc." without re-dialing. */
+                    if (unet_get_state() == UNET_STATE_LOBBY ||
+                        unet_get_state() == UNET_STATE_PLAYING)
+                    {
+                        unet_send_rename(g_Game.playerName);
+                        jo_clear_screen();
+                        g_Game.gameState = UGAME_STATE_LOBBY;
+                        lobby_init();
+                    }
+                    else
+                    {
+                        g_Game.gameState = UGAME_STATE_CONNECTING;
+                        connecting_init();
+                    }
                 }
             } else {
                 char ch = getGridChar(g_cursor_row, g_cursor_col);

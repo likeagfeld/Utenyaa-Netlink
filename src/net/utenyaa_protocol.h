@@ -81,6 +81,13 @@ extern "C" {
 #define UNET_MSG_CLIENT_FIRE_BULLET_P2 0x27 /* [shooter_pid:1][dx:4][dy:4][dz:4][x:4][y:4][z:4] */
 #define UNET_MSG_CLIENT_DROP_MINE_P2   0x28 /* [shooter_pid:1][x:4][y:4][z:4] */
 #define UNET_MSG_CLIENT_THROW_BOMB_P2  0x29 /* [shooter_pid:1][dx:4][dy:4][dz:4][x:4][y:4][z:4] */
+/* Post-auth username rename — Saturn sends after the user enters
+ * their real name on the post-Download-Characters name-entry
+ * screen, so the modem connection + auth stay alive while the
+ * server-side c.username + lobby_state get updated. Operator-
+ * requested flow: download → A press → name entry → lobby
+ * without disconnect/reconnect. Payload: [name_len:1][name:N]. */
+#define UNET_MSG_CLIENT_RENAME         0x2A
 
 /*============================================================================
  * Utenyaa Server -> Client Opcodes (0xA0-0xBF)

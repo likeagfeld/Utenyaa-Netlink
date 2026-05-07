@@ -1177,6 +1177,28 @@ void unet_send_disconnect(void)
     g_net.state = UNET_STATE_DISCONNECTED;
 }
 
+void unet_send_rename(const char* name)
+{
+    /* Payload layout matches MSG_SET_USERNAME:
+     *   [opcode:1][name_len:1][name:N]
+     * Local g_net.my_name is also updated so subsequent UI uses the
+     * new label even before the server's lobby_state broadcast
+     * round-trips back. */
+    int nlen = 0;
+    while (name[nlen] && nlen < UNET_MAX_NAME) nlen++;
+    int payload = 1 + 1 + nlen;
+    g_net.tx_buf[0] = (uint8_t)((payload >> 8) & 0xFF);
+    g_net.tx_buf[1] = (uint8_t)(payload & 0xFF);
+    g_net.tx_buf[2] = UNET_MSG_CLIENT_RENAME;
+    g_net.tx_buf[3] = (uint8_t)nlen;
+    int i;
+    for (i = 0; i < nlen; i++) g_net.tx_buf[4 + i] = (uint8_t)name[i];
+    tx(g_net.tx_buf, 2 + payload);
+    /* Mirror locally. */
+    for (i = 0; i < nlen; i++) g_net.my_name[i] = name[i];
+    g_net.my_name[nlen] = '\0';
+}
+
 /* Server-side _end_match resets c.ready=False. Client must mirror so
  * stale my_ready doesn't cause a double-toggle on the next match. */
 void unet_reset_ready_state(void)
