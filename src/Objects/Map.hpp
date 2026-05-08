@@ -468,7 +468,18 @@ namespace Objects
 					JO_COLOR_White,
 					CL32KRGB | No_Gouraud,
 					CL32KRGB | MESHoff,
-					sprHVflip,
+					sprNoflip,           /* ReyeMe (original author) confirmed: rotation
+					                      * is achieved via vertex-array reorder, not
+					                      * sprite-side H/V flip. The previous sprHVflip
+					                      * here was inherited from the very first code
+					                      * upload (49f4773) — incidental, never required
+					                      * for the rotation logic. Switching to
+					                      * sprNoflip eliminates ambiguity over whether
+					                      * SGL Dual_Plane honors the flip bits, and
+					                      * makes editor↔Saturn UV calibration trivial:
+					                      * each polygon vertex slot V[k] samples image
+					                      * corner k (V[0]=TL, V[1]=TR, V[2]=BR, V[3]=BL),
+					                      * matching the default VDP1 sprite UV layout. */
 					No_Option);
 
 				attribute.gstb = 0xe000 + currentTile;
@@ -530,6 +541,156 @@ namespace Objects
 					lab[0], lab[1], lab[2], lab[3]);
 				unet_send_dbg_log(buf);
 			}
+		}
+
+		/* Targeted Dansfield 2x2 calibration cluster diagnostic.
+		 * Emits effective image-UV per world corner for the 4 tiles
+		 * at (13,9)..(14,10) — the all-4-rotations test cluster on
+		 * tex=1 (4-piece quarter-circle pattern).
+		 *
+		 * Format (one line per tile):
+		 *   SAT_UV (x,y) rot=R  TL=(u,v) TR=(u,v) BR=(u,v) BL=(u,v)
+		 *
+		 * (u,v) is in three.js / image-TL-origin convention:
+		 *   (0,0) = image TL pixel sampled at this world corner
+		 *   (1,1) = image BR pixel sampled at this world corner
+		 *
+		 * Derivation: for each of the 4 world corners (TL/TR/BR/BL
+		 * of the tile), find which polygon slot s holds that
+		 * vertex (Vertices[s] == corner_v), then under sprHVflip
+		 * the slot samples this image corner:
+		 *   s=0 (CMD UV (0,0)) → image BR → (1,1)
+		 *   s=1 (CMD UV (1,0)) → image BL → (0,1)
+		 *   s=2 (CMD UV (1,1)) → image TL → (0,0)
+		 *   s=3 (CMD UV (0,1)) → image TR → (1,0)
+		 *
+		 * Pair this output with editor3d.js EDIT_UV log for the
+		 * same 4 tiles. Per-corner numerical match → editor and
+		 * Saturn agree pixel-for-pixel, mismatch must be in the
+		 * texture/render pipeline, NOT the UV math. Per-corner
+		 * mismatch → divergence in the UV algorithm itself,
+		 * directing where to look. */
+		{
+			const struct { int x, y; } target[4] = {
+				{13, 9}, {14, 9}, {13, 10}, {14, 10}
+			};
+			/* Actual SGL Dual_Plane sampling — calibrated against
+			 * operator hardware test on Dansfield. Cyclically shifted
+			 * one position from VDP1 raw-sprite default:
+			 *   slot 0 → image TR → (1, 0)
+			 *   slot 1 → image BR → (1, 1)
+			 *   slot 2 → image BL → (0, 1)
+			 *   slot 3 → image TL → (0, 0)
+			 * Editor's slotUVs in editor3d.js is updated in lockstep
+			 * so EDIT_UV continues to match SAT_UV byte-for-byte. */
+			static const float SLOT_UV[4][2] = {
+				{1.0f, 0.0f},  /* slot 0 → image TR */
+				{1.0f, 1.0f},  /* slot 1 → image BR */
+				{0.0f, 1.0f},  /* slot 2 → image BL */
+				{0.0f, 0.0f},  /* slot 3 → image TL */
+			};
+			for (int t = 0; t < 4; t++) {
+				int tx = target[t].x;
+				int ty = target[t].y;
+				if (tx < 0 || tx >= (int)Map::MapDimensionSize ||
+				    ty < 0 || ty >= (int)Map::MapDimensionSize) continue;
+				int idx = tx + ty * (int)Map::MapDimensionSize;
+				const uint8_t* tb = reinterpret_cast<const uint8_t*>(&level->TileData[idx]);
+				int rot = (tb[0] >> 6) & 3;
+				int corner_v[4] = {
+					(int)Map::GetVertexIndex(tx,     ty),     /* TL */
+					(int)Map::GetVertexIndex(tx + 1, ty),     /* TR */
+					(int)Map::GetVertexIndex(tx + 1, ty + 1), /* BR */
+					(int)Map::GetVertexIndex(tx,     ty + 1), /* BL */
+				};
+				float corner_uv[4][2];
+				for (int c = 0; c < 4; c++) {
+					corner_uv[c][0] = -1.0f;
+					corner_uv[c][1] = -1.0f;
+					for (int s = 0; s < 4; s++) {
+						int v = (int)this->mapMesh.pltbl[idx].Vertices[s];
+						if (v == corner_v[c]) {
+							corner_uv[c][0] = SLOT_UV[s][0];
+							corner_uv[c][1] = SLOT_UV[s][1];
+							break;
+						}
+					}
+				}
+				/* newlib snprintf on this target lacks %f support
+				 * (cost-saving build option; common on embedded
+				 * libcs). Cast each component to int — guaranteed
+				 * exact since SLOT_UV is only 0.0f or 1.0f. */
+				char buf[160];
+				snprintf(buf, sizeof(buf),
+					"SAT_UV (%d,%d) rot=%d  TL=(%d,%d) TR=(%d,%d) BR=(%d,%d) BL=(%d,%d)",
+					tx, ty, rot,
+					(int)corner_uv[0][0], (int)corner_uv[0][1],
+					(int)corner_uv[1][0], (int)corner_uv[1][1],
+					(int)corner_uv[2][0], (int)corner_uv[2][1],
+					(int)corner_uv[3][0], (int)corner_uv[3][1]);
+				unet_send_dbg_log(buf);
+			}
+		}
+
+		/* Hypothesis A — runtime sprHVflip plumbing check.
+		 * Read back the .dir field of the polygon attribute Map.hpp
+		 * actually wrote. Per SGL ATTRIBUTE macro (sl_def.h:143):
+		 *   ATTR.dir = sprHVflip & 0x3f = 0x40032 & 0x3f = 0x32
+		 * Bits 4 and 5 (mask 0x30) are H-flip and V-flip on the VDP1
+		 * sprite control word.
+		 * - dir == 0x32 → sprHVflip is fully encoded in source. If the
+		 *   visual mismatch persists, SGL Dual_Plane's slPutPolygon
+		 *   path is dropping the flip bits at draw time (rasterizer-
+		 *   level issue, not an authoring issue).
+		 * - dir == 0x02 (or anything missing 0x30) → ATTRIBUTE macro
+		 *   path stripped the flip. Source-level fix needed. */
+		{
+			int idx_calib = 13 + 9 * (int)Map::MapDimensionSize;
+			char buf[120];
+			snprintf(buf, sizeof(buf),
+				"SAT_DIR idx=(13,9) attbl.dir=0x%X attbl.atrb=0x%X attbl.flag=0x%X",
+				(unsigned)this->mapMesh.attbl[idx_calib].dir,
+				(unsigned)this->mapMesh.attbl[idx_calib].atrb,
+				(unsigned)this->mapMesh.attbl[idx_calib].flag);
+			unet_send_dbg_log(buf);
+		}
+
+		/* Hypothesis B — texture-upload orientation check.
+		 * jo_sprite_add → __internal_jo_sprite_add at jo_engine/
+		 * sprites.c:220 does a straight jo_dma_copy from PAK source
+		 * data into VDP1 VRAM. Pixel order *should* be byte-identical:
+		 *   - PAK file byte 0..1   = top-left pixel (16-bit ARGB1555)
+		 *   - PAK file byte 510..511 = bottom-right pixel
+		 * Read the first and last 16-bit words at the VRAM address
+		 * jo_engine assigned to texture (firstTerrainTexture+1) — the
+		 * tex=1 quarter-circle our calibration tiles use. User can
+		 * compare these two words against the corresponding bytes in
+		 * TERRAIN.PAK (texture 1's data starts after texture 0; each
+		 * texture is 16x16 = 512 bytes after a small header).
+		 * - First word ≠ PAK first 2 bytes → upload reorders pixels
+		 *   (V-flip or row-major→col-major).
+		 * - Equal → upload is straight; orientation is preserved. */
+		{
+			int sprite_id_tex1 = firstTerrainTexture + 1;
+			const volatile uint16_t* p =
+				(const volatile uint16_t*)jo_sprite_get_raw_data(sprite_id_tex1);
+			uint16_t first_px = p ? p[0] : 0;
+			uint16_t second_px = p ? p[1] : 0;
+			uint16_t last_px = p ? p[255] : 0;       /* 16x16=256 px, last index 255 */
+			uint16_t last_minus_1 = p ? p[254] : 0;
+			/* Split: unet_send_dbg_log caps payload at 64 bytes
+			 * (utenyaa_net.c:1253). One header line + one pixel
+			 * line keeps each under the cap. */
+			char buf[80];
+			snprintf(buf, sizeof(buf),
+				"SAT_TEX1H sprid=%d vram=0x%X",
+				sprite_id_tex1, (unsigned)(uintptr_t)p);
+			unet_send_dbg_log(buf);
+			snprintf(buf, sizeof(buf),
+				"SAT_TEX1P p0=%04X p1=%04X p254=%04X p255=%04X",
+				(unsigned)first_px, (unsigned)second_px,
+				(unsigned)last_minus_1, (unsigned)last_px);
+			unet_send_dbg_log(buf);
 		}
 
 		// Load entities to spawn
