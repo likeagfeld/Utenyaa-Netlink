@@ -164,6 +164,29 @@ namespace Entities
 						 * authority reaches HP and nothing dies. */
 						collidesWith->HandleMessages(Messages::Damage(Bullet::Damage));
 						destroyBullet = true;
+						/* Phase A telemetry: client-side bullet hit.
+						 * Pairs with server-side LAG-COMP HIT log. Used
+						 * to calibrate cone_radius — comparing client
+						 * dist² with server dist² shows the client/server
+						 * position alignment slop. Rate-limited to first
+						 * 10 per session to bound bandwidth. */
+						if (g_Game.isOnlineMode) {
+							static int s_bullet_hit_logged = 0;
+							if (s_bullet_hit_logged < 10) {
+								s_bullet_hit_logged++;
+								AABB tbox;
+								collidesWith->GetBounds(&tbox);
+								Vec3 tcenter = tbox.GetCenter();
+								int dx_w = (int)((this->position.x - tcenter.x).Value() >> 16);
+								int dy_w = (int)((this->position.y - tcenter.y).Value() >> 16);
+								int dist_sq = dx_w * dx_w + dy_w * dy_w;
+								char buf[64];
+								snprintf(buf, sizeof(buf),
+									"CLIENT_BULLET_HIT pid=%u dist2=%d",
+									(unsigned)query.Controller, dist_sq);
+								unet_send_dbg_log(buf);
+							}
+						}
 					}
 				}
 			}

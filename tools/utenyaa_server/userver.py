@@ -2213,6 +2213,15 @@ class UtenyaaServer:
         step_dx_fxp = dx * step_units
         step_dy_fxp = dy * step_units
 
+        # Phase A telemetry: track closest target during walk so we
+        # can log a "near-miss" record when no hit registers. Enables
+        # tuning cone_radius from observed near-miss distribution.
+        closest_dist_sq = None
+        closest_pid = -1
+        closest_step = -1
+        closest_bxy = (0, 0)
+        closest_txy = (0, 0)
+
         for i in range(n_steps):
             bx_w = pos_x >> 16
             by_w = pos_y >> 16
@@ -2252,16 +2261,35 @@ class UtenyaaServer:
                 # we only check sign so the scale doesn't matter.
                 if ddx * dx + ddy * dy < 0:
                     continue
-                if ddx * ddx + ddy * ddy <= hit_r_sq:
+                d_sq_now = ddx * ddx + ddy * ddy
+                # Phase A telemetry: track closest along the path.
+                if closest_dist_sq is None or d_sq_now < closest_dist_sq:
+                    closest_dist_sq = d_sq_now
+                    closest_pid = pid
+                    closest_step = i
+                    closest_bxy = (bx_w, by_w)
+                    closest_txy = (tx_w, ty_w)
+                if d_sq_now <= hit_r_sq:
                     # === HIT ===
                     new_hp = max(0, p.hp - damage)
                     p.hp = new_hp
                     self._broadcast(build_damage(pid, shooter_pid, damage, new_hp))
-                    log.info("LAG-COMP HIT: shooter=%d → victim=%d hp %d→%d "
-                             "(rewound %d ticks, step=%d/%d, dist²=%d/%d)",
+                    # Phase A enhanced telemetry: also log bullet pos +
+                    # target rewound pos + target current pos + delta.
+                    # The delta = position the target moved during rewind
+                    # window; useful for tuning cone_radius slop.
+                    cur_x_w = p.x >> 16
+                    cur_y_w = p.y >> 16
+                    dlx = tx_w - cur_x_w
+                    dly = ty_w - cur_y_w
+                    log.info("LAG-COMP HIT: shooter=%d -> victim=%d hp %d->%d "
+                             "(rewound %d ticks, step=%d/%d, dist2=%d/%d) "
+                             "bxy=(%d,%d) rewxy=(%d,%d) curxy=(%d,%d) drift=(%d,%d)",
                              shooter_pid, pid, p.hp + damage, new_hp,
                              rewind_ticks, i, n_steps,
-                             ddx * ddx + ddy * ddy, hit_r_sq)
+                             d_sq_now, hit_r_sq,
+                             bx_w, by_w, tx_w, ty_w, cur_x_w, cur_y_w,
+                             dlx, dly)
                     if new_hp == 0:
                         p.alive = False
                         p.deaths += 1
@@ -2278,6 +2306,19 @@ class UtenyaaServer:
                     return True
             pos_x += step_dx_fxp
             pos_y += step_dy_fxp
+
+        # Phase A telemetry: no hit registered. Log near-misses
+        # (dist <= 20 world units, i.e. within ~2 tank widths) so we
+        # see the distribution of "almost hit" shots vs the cone
+        # threshold. Far misses are noise; skip them.
+        if closest_pid >= 0 and closest_dist_sq is not None and \
+           closest_dist_sq <= 400:
+            log.info("LAG-COMP MISS: shooter=%d closest_pid=%d step=%d/%d "
+                     "dist2=%d/%d bxy=(%d,%d) rewxy=(%d,%d)",
+                     shooter_pid, closest_pid, closest_step, n_steps,
+                     closest_dist_sq, hit_r_sq,
+                     closest_bxy[0], closest_bxy[1],
+                     closest_txy[0], closest_txy[1])
 
         return False
 

@@ -642,6 +642,22 @@ namespace Entities
 		{
 			this->position = serverPos;
 			this->angle    = serverAngle;
+			/* Phase A telemetry: HP flicker detection. Emits when snap
+			 * HP differs from local — signature of the snap-overwrite-
+			 * after-DAMAGE bug. Rate-limited to first 10 events per
+			 * session to bound bandwidth on long flicker bursts. */
+			if (serverHp != this->health) {
+				static int s_hp_snap_logged = 0;
+				if (s_hp_snap_logged < 10) {
+					s_hp_snap_logged++;
+					char buf[64];
+					snprintf(buf, sizeof(buf),
+						"HP_SNAP pid=%u local=%d server=%d",
+						(unsigned)this->controller,
+						(int)this->health, (int)serverHp);
+					unet_send_dbg_log(buf);
+				}
+			}
 			this->health   = serverHp;
 			(void)serverVel;
 		}
